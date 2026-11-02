@@ -1,6 +1,9 @@
 import { idbGet, idbSet } from "./db.js";
 import { normalizeKey, titleScore } from "./library.js";
 
+const OMDB_KEY = "8f11b01c";
+const OMDB = "https://www.omdbapi.com/";
+
 const jobs = [];
 let active = 0;
 
@@ -51,7 +54,55 @@ function stripHtml(value) {
 }
 
 function cacheKey(item) {
-  return `${item.type}:${item.title.toLowerCase()}:${item.year || ""}`;
+  return `v3:${OMDB_KEY}:${item.type}:${item.title.toLowerCase()}:${item.year || ""}`;
+}
+
+function clean(value) {
+  const text = String(value || "").trim();
+  if (!text || text.toUpperCase() === "N/A") return "";
+  return text;
+}
+
+function remoteYear(value) {
+  const match = String(value || "").match(/\d{4}/);
+  return match ? Number(match[0]) : null;
+}
+
+function ratingText(ratings, source) {
+  const hit = (ratings || []).find((entry) => entry.Source === source);
+  return clean(hit?.Value);
+}
+
+export function readOmdb(payload) {
+  if (!payload || payload.Response === "False") {
+    if (/invalid api key/i.test(payload?.Error || "")) return { invalidKey: true };
+    return { missed: true };
+  }
+  const title = clean(payload.Title);
+  if (!title) return { missed: true };
+  const rating = Number(payload.imdbRating);
+  const genres = clean(payload.Genre) ? payload.Genre.split(",").map((item) => item.trim()).filter(Boolean) : [];
+  const poster = clean(payload.Poster);
+  return {
+    missed: false,
+    source: "OMDb",
+    title,
+    year: remoteYear(payload.Year),
+    rating: Number.isFinite(rating) && rating > 0 ? rating : null,
+    imdb: Number.isFinite(rating) && rating > 0,
+    description: clean(payload.Plot),
+    genres,
+    posterUrl: /^https:\/\//i.test(poster) ? poster : "",
+    backdropUrl: "",
+    runtime: parseRuntime(payload.Runtime),
+    director: clean(payload.Director),
+    actors: clean(payload.Actors),
+    released: clean(payload.Released),
+    rottenTomatoes: ratingText(payload.Ratings, "Rotten Tomatoes"),
+    metacritic: ratingText(payload.Ratings, "Metacritic"),
+    imdbId: clean(payload.imdbID),
+    episodes: [],
+  };
 }
 
 function yearsClash(itemYear, remoteYear) {
@@ -159,7 +210,76 @@ async function fromWikipedia(item) {
   };
 }
 
+function omdbUrl(params) {
+  const query = new URLSearchParams({ apikey: OMDB_KEY, ...params });
+  return `${OMDB}?${query.toString()}`;
+}
+
+function bestSearchHit(results, item) {
+  let best = null;
+  let bestScore = 0;
+  for (const hit of results || []) {
+    const year = remoteYear(hit.Year);
+    if (!acceptable(hit.Title, year, item)) continue;
+    const score = titleScore(hit.Title, item.title);
+    if (score > bestScore) {
+      best = hit;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+let omdbDisabled = false;
+
+async function fromOmdb(item) {
+  if (omdbDisabled) return { invalidKey: true };
+  const type = item.type === "series" ? "series" : "movie";
+  const attempts = [];
+  if (item.year) attempts.push({ t: item.title, type, y: String(item.year), plot: "full" });
+  attempts.push({ t: item.title, type, plot: "full" });
+  for (const params of attempts) {
+    const direct = await fetchJson(omdbUrl(params));
+    if (!direct) return null;
+    const meta = readOmdb(direct);
+    if (meta.invalidKey) {
+      omdbDisabled = true;
+      return meta;
+    }
+    if (!meta.missed && acceptable(meta.title, meta.year, item)) return meta;
+    if (direct.Response !== "False") break;
+  }
+  const search = await fetchJson(omdbUrl({ s: item.title, type }));
+  if (!search) return null;
+  const hit = search.Response === "False" ? null : bestSearchHit(search.Search, item);
+  if (!hit?.imdbID) return { missed: true };
+  const full = await fetchJson(omdbUrl({ i: hit.imdbID, plot: "full", tomatoes: "true" }));
+  if (!full) return null;
+  const meta = readOmdb(full);
+  if (meta.missed || !acceptable(meta.title, meta.year, item)) return { missed: true };
+  return meta;
+}
+
 async function lookup(item) {
+  const omdb = await fromOmdb(item);
+  if (omdb?.invalidKey) {
+    const extra = await legacyLookup(item);
+    return extra ? { ...extra, invalidKey: true } : { invalidKey: true, missed: true };
+  }
+  if (omdb && !omdb.missed) {
+    if (item.type === "series") {
+      const extra = await fromTvMaze(item);
+      if (extra?.episodes?.length) omdb.episodes = extra.episodes;
+      if (extra?.backdropUrl) omdb.backdropUrl = extra.backdropUrl;
+    }
+    return omdb;
+  }
+  const extra = await legacyLookup(item);
+  if (!extra) return omdb;
+  return omdb?.missed ? { ...extra, omdbMissed: true } : extra;
+}
+
+async function legacyLookup(item) {
   if (item.type === "series") {
     const show = await fromTvMaze(item);
     if (show?.description || show?.posterUrl) {
@@ -188,7 +308,7 @@ function genericEpisodeTitle(title) {
 }
 
 export function applyMeta(item, meta) {
-  if (!meta) return false;
+  if (!meta || meta.missed) return false;
   let changed = false;
   const fill = (key, value) => {
     if (value == null || value === "" || (Array.isArray(value) && !value.length)) return;
@@ -206,6 +326,12 @@ export function applyMeta(item, meta) {
   if (!item.posterPath) fill("posterUrl", meta.posterUrl);
   if (!item.backdropPath) fill("backdropUrl", meta.backdropUrl);
   if (!item.year) fill("year", meta.year);
+  fill("director", meta.director);
+  fill("actors", meta.actors);
+  fill("released", meta.released);
+  fill("rottenTomatoes", meta.rottenTomatoes);
+  fill("metacritic", meta.metacritic);
+  fill("imdbId", meta.imdbId);
   if (!item.duration && item.type === "movie") fill("duration", meta.runtime);
   if (!(item.genres || []).length && meta.genres?.length) {
     item.genres = [...meta.genres];
@@ -237,11 +363,13 @@ export function applyMeta(item, meta) {
   }
   if (changed) {
     item.credits = [...new Set([...(item.credits || []), meta.source].filter(Boolean))];
+    if (meta.source && item.metaSource !== "local") item.metaSource = meta.source;
   }
   return changed;
 }
 
 function needsEnrichment(item) {
+  if (!item.omdbChecked) return true;
   if (!item.rating || !item.description || !(item.posterPath || item.posterUrl)) return true;
   if (item.type !== "series") return false;
   return (item.seasons || []).some((season) => season.episodes.some((episode) => !episode.description || /^(episode\s+\d+|extra)$/i.test(episode.title || "")));
@@ -256,10 +384,13 @@ export function enrichItem(item, onUpdate, priority = 1) {
     let meta = fresh ? cached.data : null;
     if (!fresh) {
       meta = await lookup(item);
-      await idbSet("meta", key, { at: Date.now(), data: meta });
+      if (meta) await idbSet("meta", key, { at: Date.now(), data: meta });
     }
-    const changed = applyMeta(item, meta);
-    if (changed && onUpdate) onUpdate(item);
+    if (meta?.invalidKey && onUpdate) onUpdate(item, { invalidKey: true });
+    const hadCheck = Boolean(item.omdbChecked);
+    const changed = applyMeta(item, meta?.missed ? null : meta);
+    if (meta && !meta.invalidKey) item.omdbChecked = true;
+    if ((changed || item.omdbChecked !== hadCheck) && onUpdate) onUpdate(item);
     return changed;
   }, priority);
 }

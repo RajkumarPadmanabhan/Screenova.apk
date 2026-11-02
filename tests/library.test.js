@@ -29,6 +29,7 @@ test("groups seasons under one series and keeps movies, genres, size, and sideca
     { relativePath: "Movies/Dune Part Two (2024)/movie.nfo", name: "movie.nfo", kind: "nfo", text: "<movie><title>Dune: Part Two</title><plot>Paul Atreides unites with the Fremen.</plot><rating>8.7</rating><year>2024</year><genre>Sci-Fi</genre><genre>Adventure</genre><runtime>166</runtime></movie>" },
     { relativePath: "Movies/Dune Part Two (2024)/Dune.Part.Two.2024.1080p.BluRay.en.srt", name: "Dune.Part.Two.2024.1080p.BluRay.en.srt", kind: "subtitle", size: 100 },
     video("Series/The Bear/Season 1/The.Bear.S01E01.720p.mkv", 500 * 1024 * 1024, 10),
+    { relativePath: "Series/The Bear/Season 1/Subs/The.Bear.S01E01.720p.en.srt", name: "The.Bear.S01E01.720p.en.srt", kind: "subtitle", size: 80 },
     video("Series/The Bear/Season 1/The.Bear.S01E02.720p.mkv", 510 * 1024 * 1024, 11),
     video("Series/The Bear/Season 2/The.Bear.S02E01.1080p.mkv", 800 * 1024 * 1024, 12),
     video("Series/The Bear/Interview.mkv", 200 * 1024 * 1024, 13),
@@ -63,6 +64,7 @@ test("groups seasons under one series and keeps movies, genres, size, and sideca
   assert.equal(bear.category, "Series");
   assert.deepEqual(bear.seasons.map((season) => season.name), ["Season 1", "Season 2", "Extras"]);
   assert.equal(bear.seasons[0].episodes.length, 2);
+  assert.ok(bear.seasons[0].episodes[0].subtitlePath.endsWith(".en.srt"));
   assert.equal(bear.seasons[1].episodes[0].episode, 1);
   assert.equal(bear.posterPath, "Series/The Bear/poster.jpg");
   assert.ok(bear.size > 800 * 1024 * 1024);

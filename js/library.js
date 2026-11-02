@@ -370,15 +370,21 @@ function attachNfo(target, nfo) {
   target.metaSource = "local";
 }
 
-function subtitleFor(subtitles, filePath) {
+function subtitlesNear(subtitles, filePath) {
   const dir = dirOf(filePath);
   const base = filePath.split("/").pop().replace(/\.[^.]+$/, "").toLowerCase();
-  const hit = subtitles.find((sub) => {
-    if (dirOf(sub.relativePath) !== dir) return false;
-    const stem = sub.name.replace(/\.[^.]+$/, "").toLowerCase();
-    return stem === base || stem.startsWith(`${base}.`);
-  });
-  return hit ? hit.relativePath : null;
+  const parent = dirOf(dir);
+  const allowed = new Set([dir, `${dir}/Subs`, `${dir}/Subtitles`, `${dir}/Sub`, `${parent}/Subs`, `${parent}/Subtitles`].map((item) => item.toLowerCase()));
+  return subtitles.filter((sub) => {
+    if (!allowed.has(dirOf(sub.relativePath).toLowerCase())) return false;
+    const stem = String(sub.name || "").replace(/\.[^.]+$/, "").toLowerCase();
+    return stem === base || stem.startsWith(`${base}.`) || stem.startsWith(`${base} `) || stem.startsWith(`${base}_`);
+  }).map((sub) => sub.relativePath);
+}
+
+function attachSubtitles(version, subtitles) {
+  version.subtitlePaths = subtitlesNear(subtitles, version.filePath);
+  version.subtitlePath = version.subtitlePaths[0] || null;
 }
 
 function seasonRank(number) {
@@ -491,7 +497,7 @@ export function buildLibrary(entries) {
         });
         const episodes = [...groups.values()].map((group) => {
           const versions = sortVersions(group.map(versionOf));
-          for (const version of versions) version.subtitlePath = subtitleFor(subtitles, version.filePath);
+          for (const version of versions) attachSubtitles(version, subtitles);
           const primary = group.slice().sort((a, b) => (b.episodeTitle ? 1 : 0) - (a.episodeTitle ? 1 : 0) || b.size - a.size)[0];
           const episodeNo = primary.episode ?? 0;
           const generic = number === 1000 ? "Extra" : `Episode ${episodeNo || ""}`.trim();
@@ -585,16 +591,19 @@ export function buildLibrary(entries) {
     for (const assignment of assignments) {
       const usedIds = new Set(items.map((item) => item.id));
       const versions = sortVersions(assignment.group.records.map(versionOf));
-      for (const version of versions) version.subtitlePath = subtitleFor(subtitles, version.filePath);
-      const extras = assignment.extras.map((record) => ({
-        filePath: record.filePath,
-        fileName: record.fileName,
-        title: stripReleaseTags(record.fileName.replace(/\.[^.]+$/, "")) || "Extra",
-        size: record.size,
-        lastModified: record.lastModified || 0,
-        ext: record.ext,
-        subtitlePath: subtitleFor(subtitles, record.filePath),
-      }));
+      for (const version of versions) attachSubtitles(version, subtitles);
+      const extras = assignment.extras.map((record) => {
+        const extra = {
+          filePath: record.filePath,
+          fileName: record.fileName,
+          title: stripReleaseTags(record.fileName.replace(/\.[^.]+$/, "")) || "Extra",
+          size: record.size,
+          lastModified: record.lastModified || 0,
+          ext: record.ext,
+        };
+        attachSubtitles(extra, subtitles);
+        return extra;
+      });
       let id = slugId("movie", assignment.group.title, assignment.group.year);
       let copy = 2;
       while (usedIds.has(id)) {

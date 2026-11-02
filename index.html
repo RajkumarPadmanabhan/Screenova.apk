@@ -10,20 +10,20 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/app.css?v=3">
+  <link rel="stylesheet" href="css/app.css?v=6">
 </head>
-<body>
+<body class="gate">
   <div class="app">
     <header class="topbar">
       <a class="brand" href="#/">
         <span class="mark" aria-hidden="true"></span>
-        Screenova
+        <span id="brand-name">Screenova</span>
       </a>
       <nav class="desk-nav" aria-label="Primary">
-        <a href="#/" data-nav="home">Home</a>
-        <a href="#/movies" data-nav="movies">Movies</a>
-        <a href="#/series" data-nav="series">Series</a>
-        <a href="#/list" data-nav="list">My List</a>
+        <a href="#/" data-nav="home"><span data-label="home">Home</span></a>
+        <a href="#/movies" data-nav="movies"><span data-label="movies">Movies</span></a>
+        <a href="#/series" data-nav="series"><span data-label="series">TV Shows</span></a>
+        <a href="#/list" data-nav="list"><span data-label="list">My List</span></a>
       </nav>
       <div class="top-actions">
         <label class="search">
@@ -39,17 +39,36 @@
         </button>
       </div>
     </header>
-    <main id="view"></main>
+    <main id="view">
+      <section class="gate">
+        <p class="eyebrow">Screenova</p>
+        <h1>Choose your screen.</h1>
+        <p class="lede">Pick a Netflix layout or a Prime Video layout first. Then add the folder of movies and series already on this device.</p>
+        <div class="choices">
+          <button class="choice netflix" type="button" data-act="skin" data-skin="netflix">
+            <span class="choice-kicker">Interface</span>
+            <strong>Netflix</strong>
+            <span>Black screen, red highlights, poster rows, and a Play button.</span>
+          </button>
+          <button class="choice prime" type="button" data-act="skin" data-skin="prime">
+            <span class="choice-kicker">Interface</span>
+            <strong>prime video</strong>
+            <span>Navy screen, blue Watch now button, wide banners, and a Watchlist.</span>
+          </button>
+        </div>
+      </section>
+    </main>
     <nav class="tabbar" aria-label="Mobile">
-      <a href="#/" data-nav="home"><svg viewBox="0 0 24 24"><path d="M4 11.5 12 4l8 7.5"></path><path d="M7 10.5V20h10v-9.5"></path></svg>Home</a>
-      <a href="#/search" data-nav="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>Search</a>
-      <a href="#/library" data-nav="library"><svg viewBox="0 0 24 24"><path d="M12 4v10"></path><path d="M8 10l4 4 4-4"></path><path d="M5 20h14"></path></svg>Library</a>
-      <a href="#/list" data-nav="list"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2"></circle><path d="M5.5 19.5c1.2-3 3.4-4.5 6.5-4.5s5.3 1.5 6.5 4.5"></path></svg>My List</a>
+      <a href="#/" data-nav="home"><svg viewBox="0 0 24 24"><path d="M4 11.5 12 4l8 7.5"></path><path d="M7 10.5V20h10v-9.5"></path></svg><span data-label="home">Home</span></a>
+      <a href="#/search" data-nav="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg><span data-label="search">Search</span></a>
+      <a href="#/library" data-nav="library"><svg viewBox="0 0 24 24"><path d="M12 4v10"></path><path d="M8 10l4 4 4-4"></path><path d="M5 20h14"></path></svg><span data-label="library">Downloads</span></a>
+      <a href="#/list" data-nav="list"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2"></circle><path d="M5.5 19.5c1.2-3 3.4-4.5 6.5-4.5s5.3 1.5 6.5 4.5"></path></svg><span data-label="list">My List</span></a>
     </nav>
   </div>
   <div id="player" class="player" hidden></div>
   <div id="toast" class="toast" role="status"></div>
   <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
-  <script type="module" src="js/app.js?v=2"></script>
+  <input id="sub-file" type="file" accept=".srt,.vtt,.ass,.ssa,text/vtt,application/x-subrip" hidden>
+  <script type="module" src="js/app.js?v=6"></script>
 </body>
 </html>

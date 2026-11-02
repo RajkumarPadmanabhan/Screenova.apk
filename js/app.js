@@ -8,10 +8,10 @@ import {
   formatDuration,
   librarySignature,
   normalizeKey,
-  playableExt,
   shortText,
 } from "./library.js";
 import { enrichItem } from "./metadata.js";
+import { fileWantsDemux, languageFromName, loadMovi, moviWasmUrl, vttFile } from "./playback.js";
 import { collectFromFileList, collectFromHandle } from "./scan.js";
 
 const state = {
@@ -32,6 +32,8 @@ const state = {
   openSeason: null,
   player: null,
   keepScroll: false,
+  skin: "",
+  dashQuery: "",
 };
 
 const view = () => document.getElementById("view");
@@ -152,6 +154,22 @@ function continueList() {
   return rows.sort((a, b) => b.progress.updated - a.progress.updated).slice(0, 16);
 }
 
+function onMeta(updated, info) {
+  if (info?.invalidKey) {
+    state.omdbKeyError = true;
+    if (!onMeta.told) {
+      onMeta.told = true;
+      toast("OMDb rejected the API key. Titles stay without a poster or director until the key is valid.");
+    }
+    const note = document.querySelector("[data-omdb]");
+    if (note) note.hidden = false;
+    return;
+  }
+  if (!updated) return;
+  patchItem(updated);
+  scheduleSave();
+}
+
 function toast(message) {
   const node = document.getElementById("toast");
   node.textContent = message;
@@ -171,11 +189,60 @@ function syncLabel() {
   return `Synced ${Math.round(minutes / 60)}h ago`;
 }
 
+function copy() {
+  if (state.skin === "prime") {
+    return {
+      brand: "prime video",
+      home: "Home",
+      movies: "Movies",
+      series: "TV shows",
+      list: "Watchlist",
+      search: "Find",
+      library: "Dashboard",
+      play: "Watch now",
+      listAdd: "Watchlist",
+      listOn: "In Watchlist",
+      recent: "Recently added",
+      continue: "Continue watching",
+    };
+  }
+  return {
+    brand: "Netflix",
+    home: "Home",
+    movies: "Movies",
+    series: "TV Shows",
+    list: "My List",
+    search: "Search",
+      library: "Dashboard",
+    play: "Play",
+    listAdd: "My List",
+    listOn: "In My List",
+    recent: "Recently Added",
+    continue: "Continue Watching",
+  };
+}
+
+function applySkin() {
+  document.body.classList.toggle("gate", !state.skin);
+  document.body.classList.toggle("skin-netflix", state.skin === "netflix");
+  document.body.classList.toggle("skin-prime", state.skin === "prime");
+  const words = copy();
+  const brand = document.getElementById("brand-name");
+  if (brand) brand.textContent = state.skin ? words.brand : "Screenova";
+  document.querySelectorAll("[data-label]").forEach((node) => {
+    const key = node.dataset.label;
+    if (words[key]) node.textContent = words[key];
+  });
+  const theme = document.querySelector('meta[name="theme-color"]');
+  if (theme) theme.content = state.skin === "prime" ? "#0f171e" : "#141414";
+}
+
 function paintChrome() {
+  applySkin();
   const nav = currentNav();
   document.querySelectorAll("[data-nav]").forEach((link) => link.classList.toggle("active", link.dataset.nav === nav));
   const sync = document.getElementById("sync");
-  if (sync) sync.textContent = syncLabel();
+  if (sync) sync.textContent = state.items.length || state.connected ? syncLabel() : "Add files";
 }
 
 function cacheItems(items) {
@@ -242,8 +309,8 @@ function hero(item) {
       <div class="hero-meta">${ratingMarkup(item)}<span>${esc([item.year, formatDuration(item.duration), formatBytes(item.size), item.type === "series" ? `${item.seasons.filter((season) => season.number < 1000).length} seasons` : ""].filter(Boolean).join("  ·  "))}</span></div>
       <p class="synopsis" data-desc>${esc(shortText(blurb(item), 240))}</p>
       <div class="actions">
-        <button class="play" type="button" data-act="play" data-id="${esc(item.id)}" data-ep="${esc(episode?.id || "")}">Play</button>
-        <button class="ghost" type="button" data-act="list" data-list="${esc(item.id)}">${state.myList.has(item.id) ? "In My List" : "My List"}</button>
+        <button class="play" type="button" data-act="play" data-id="${esc(item.id)}" data-ep="${esc(episode?.id || "")}">${esc(copy().play)}</button>
+        <button class="ghost" type="button" data-act="list" data-list="${esc(item.id)}">${state.myList.has(item.id) ? esc(copy().listOn) : esc(copy().listAdd)}</button>
         <a class="ghost" href="#/title/${encodeURIComponent(item.id)}">Details</a>
       </div>
     </div>
@@ -257,19 +324,43 @@ function banners() {
   }
   if (state.needsPermission) {
     const name = state.folderName ? `“${esc(state.folderName)}”` : "your folder";
-    html += `<div class="banner"><p>Allow Screenova to read ${name} again. New downloads show up after that, and playback stays on this device.</p><button class="solid" type="button" data-act="choose">Allow access</button></div>`;
+    html += `<div class="banner"><p>Allow Screenova to read ${name} once. After that, every movie and series in it plays without asking for a path again.</p><button class="solid" type="button" data-act="allow">Allow access</button></div>`;
   }
   return html;
 }
 
+function gateView() {
+  return `<section class="gate">
+    <p class="eyebrow">Screenova</p>
+    <h1>Choose your screen.</h1>
+    <p class="lede">Pick a Netflix layout or a Prime Video layout first. Then add the folder of movies and series already on this device.</p>
+    <div class="choices">
+      <button class="choice netflix" type="button" data-act="skin" data-skin="netflix">
+        <span class="choice-kicker">Interface</span>
+        <strong>Netflix</strong>
+        <span>Black screen, red highlights, poster rows, and a Play button.</span>
+      </button>
+      <button class="choice prime" type="button" data-act="skin" data-skin="prime">
+        <span class="choice-kicker">Interface</span>
+        <strong>prime video</strong>
+        <span>Navy screen, blue Watch now button, wide banners, and a Watchlist.</span>
+      </button>
+    </div>
+  </section>`;
+}
+
 function setupView() {
+  const look = state.skin === "prime" ? "Prime Video" : "Netflix";
   return `<section class="setup">
-    <p class="eyebrow">Local library</p>
-    <h1>Your movies, already downloaded.</h1>
-    <p class="lede">Choose the folder where your movies and series are saved. Screenova lists each file with its name, category, size, and artwork, and keeps every season of a series under one title.</p>
-    <div class="actions"><button class="solid" type="button" data-act="choose">Choose folder</button></div>
+    <p class="eyebrow">${esc(look)}</p>
+    <h1>Add your files.</h1>
+    <p class="lede">Choose the folder where your movies and series are saved. They show up in this ${esc(look)} layout with the name, category, size, and artwork from each file.</p>
+    <div class="actions">
+      <button class="solid" type="button" data-act="choose">Add folder</button>
+      <button class="ghost" type="button" data-act="reset-skin">Change interface</button>
+    </div>
     <ul class="points">
-      <li>Movies and series are arranged by category.</li>
+      <li>Add the folder once. Screenova sorts each file as a movie or a series and does not ask for a path again.</li>
       <li>A season folder, or files named S01E02, becomes Season 1, Season 2, and so on.</li>
       <li>File size comes from the download. Rating, poster, and a short description are added when the title matches.</li>
     </ul>
@@ -292,11 +383,12 @@ function homeView() {
     }
   }
   const genreRows = [...groups.entries()].filter(([, list]) => list.length).sort((a, b) => b[1].length - a[1].length).slice(0, 8);
+  const words = copy();
   return `${banners()}${feature ? hero(feature) : ""}
-    ${continueList().length ? `<section class="row"><div class="row-head"><h2>Continue watching</h2></div><div class="scroller">${continueList().map(continueCard).join("")}</div></section>` : ""}
-    ${row("Recently added", recent(), { land: true })}
-    ${row("Movies", movies().slice(0, 18), { href: "#/movies" })}
-    ${row("Series", seriesItems().slice(0, 18), { href: "#/series" })}
+    ${continueList().length ? `<section class="row"><div class="row-head"><h2>${esc(words.continue)}</h2></div><div class="scroller">${continueList().map(continueCard).join("")}</div></section>` : ""}
+    ${row(words.recent, recent(), { land: true })}
+    ${row(words.movies, movies().slice(0, 18), { href: "#/movies" })}
+    ${row(words.series, seriesItems().slice(0, 18), { href: "#/series" })}
     ${genreRows.map(([genre, list]) => row(genre, list.slice(0, 18), { href: `#/browse/${encodeURIComponent(genre)}` })).join("")}`;
 }
 
@@ -307,12 +399,74 @@ function chips(active, names, base) {
 function gridView(kind, genre = "All") {
   const source = kind === "movie" ? movies() : kind === "series" ? seriesItems() : state.items;
   const list = withGenre(source, genre);
-  const title = kind === "movie" ? "Movies" : kind === "series" ? "Series" : genre;
+  const words = copy();
+  const title = kind === "movie" ? words.movies : kind === "series" ? words.series : genre;
   return `<section class="page">${banners()}
     <div class="page-head"><h1>${esc(title)}</h1><span class="muted">${list.length} titles</span></div>
     ${chips(genre, genreNames(source), kind === "movie" ? "movies" : kind === "series" ? "series" : "browse")}
     ${list.length ? `<div class="grid">${list.map((item) => card(item)).join("")}</div>` : `<p class="lede" style="padding:16px">No titles in this category yet.</p>`}
   </section>`;
+}
+
+function factMarkup(item) {
+  const bits = [
+    ratingMarkup(item),
+    item.year ? `<span>${esc(item.year)}</span>` : "",
+    item.released ? `<span>${esc(item.released)}</span>` : "",
+    item.director ? `<span>Directed by ${esc(item.director)}</span>` : "",
+    formatDuration(item.duration) ? `<span>${esc(formatDuration(item.duration))}</span>` : "",
+    `<span>${esc(formatBytes(item.size))}</span>`,
+    item.rottenTomatoes ? `<span>Rotten Tomatoes ${esc(item.rottenTomatoes)}</span>` : "",
+    item.metacritic ? `<span>Metacritic ${esc(item.metacritic)}</span>` : "",
+    ...(item.genres || []).map((genre) => `<span>${esc(genre)}</span>`),
+  ];
+  return bits.filter(Boolean).join("");
+}
+
+function videoCount(item) {
+  if (!item) return 0;
+  if (item.type === "movie") return (item.versions?.length || 0) + (item.extras?.length || 0);
+  return (item.seasons || []).reduce((sum, season) => sum + (season.episodes || []).reduce((inner, episode) => inner + (episode.versions?.length || 0), 0), 0);
+}
+
+function hasDetails(item) {
+  return Boolean(item.director || item.imdbId || item.posterUrl || item.metaSource);
+}
+
+function dashTitles(query) {
+  const q = normalizeKey(query);
+  if (!q) return state.items;
+  return state.items.filter((item) => normalizeKey(`${item.title} ${item.director || ""} ${item.showDir || ""} ${(item.genres || []).join(" ")}`).includes(q));
+}
+
+function dashFiles(query) {
+  const q = normalizeKey(query);
+  const rows = [];
+  for (const item of state.items) {
+    const files = item.type === "movie"
+      ? [...(item.versions || []), ...(item.extras || [])]
+      : (item.seasons || []).flatMap((season) => (season.episodes || []).flatMap((episode) => episode.versions || []));
+    for (const file of files) {
+      const path = file.filePath || "";
+      if (q && !normalizeKey(`${item.title} ${path}`).includes(q)) continue;
+      rows.push({ item, path, size: file.size || 0, kind: file.quality || file.ext || "" });
+    }
+  }
+  return rows;
+}
+
+function dashTitleRow(item) {
+  const status = state.preview ? "Sample layout" : hasDetails(item) ? (item.metaSource || "Matched") : (item.omdbChecked ? "No public match" : "Looking up");
+  return `<tr data-dash="${esc(item.id)}">
+    <td><button class="dash-title" type="button" data-act="open" data-id="${esc(item.id)}"><img src="${esc(posterFor(item))}" alt=""><span><strong>${esc(item.title)}</strong><small>${esc(item.showDir || item.category)}</small></span></button></td>
+    <td>${esc(item.category)}</td>
+    <td>${esc(item.year || "—")}</td>
+    <td>${esc(item.director || "—")}</td>
+    <td>${item.rating ? esc(Number(item.rating).toFixed(1)) : "—"}</td>
+    <td>${esc(formatBytes(item.size))}</td>
+    <td>${videoCount(item)}</td>
+    <td>${esc(status)}</td>
+  </tr>`;
 }
 
 function detailView(item) {
@@ -327,19 +481,13 @@ function detailView(item) {
       <div>
         <p class="eyebrow">${esc(item.category)}</p>
         <h1>${esc(item.title)}</h1>
-        <div class="facts">
-          ${ratingMarkup(item)}
-          ${item.year ? `<span>${esc(item.year)}</span>` : ""}
-          ${formatDuration(item.duration) ? `<span>${esc(formatDuration(item.duration))}</span>` : ""}
-          <span>${esc(formatBytes(item.size))}</span>
-          ${(item.genres || []).map((genre) => `<span>${esc(genre)}</span>`).join("")}
-        </div>
+        <div class="facts">${factMarkup(item)}</div>
         <p class="plot" data-plot>${esc(blurb(item))}</p>
         <div class="actions">
-          <button class="play" type="button" data-act="play" data-id="${esc(item.id)}" data-ep="${esc(season?.episodes[0]?.id || "")}">Play</button>
-          <button class="ghost" type="button" data-act="list" data-list="${esc(item.id)}">${state.myList.has(item.id) ? "In My List" : "My List"}</button>
+          <button class="play" type="button" data-act="play" data-id="${esc(item.id)}" data-ep="${esc(season?.episodes[0]?.id || "")}">${esc(copy().play)}</button>
+          <button class="ghost" type="button" data-act="list" data-list="${esc(item.id)}">${state.myList.has(item.id) ? esc(copy().listOn) : esc(copy().listAdd)}</button>
         </div>
-        ${item.credits?.length ? `<p class="credits">Details: ${esc(item.credits.join(", "))}. Video stays in your folder.</p>` : `<p class="credits">File size is read from your folder. Poster and synopsis fill in when a match is found.</p>`}
+        ${item.credits?.length ? `<p class="credits">Details: ${esc(item.credits.join(", "))}. Video stays in your folder. Audio tracks and subtitles in the file can be switched while it plays.</p>` : `<p class="credits">File size is read from your folder. While a title plays, switch audio and subtitles from the file, search this folder, or upload an SRT, VTT, or ASS subtitle.</p>`}
         ${versions.length > 1 ? `<h3>Versions</h3><div class="versions">${versions.map((version) => `<button class="version" type="button" data-act="play" data-id="${esc(item.id)}" data-file="${esc(version.filePath)}">${esc(version.quality || version.ext)} · ${esc(formatBytes(version.size))}</button>`).join("")}</div>` : ""}
         ${item.extras?.length ? `<h3>Extras</h3><div class="versions">${item.extras.map((extra) => `<button class="version" type="button" data-act="play" data-id="${esc(item.id)}" data-file="${esc(extra.filePath)}">${esc(extra.title)} · ${esc(formatBytes(extra.size))}</button>`).join("")}</div>` : ""}
         ${seasons.length ? `<div class="season-switch">${seasons.map((entry) => `<button class="season-btn ${entry.number === selected ? "on" : ""}" type="button" data-act="season" data-season="${entry.number}">${esc(entry.name)}</button>`).join("")}</div>
@@ -377,31 +525,74 @@ function searchView() {
 
 function listView() {
   const saved = state.items.filter((item) => state.myList.has(item.id));
-  return `<section class="page">${banners()}<div class="page-head"><h1>My List</h1></div>${saved.length ? `<div class="grid">${saved.map((item) => card(item)).join("")}</div>` : `<p class="lede" style="padding:16px">Save a title and it stays on this device.</p>`}</section>`;
+  return `<section class="page">${banners()}<div class="page-head"><h1>${esc(copy().list)}</h1></div>${saved.length ? `<div class="grid">${saved.map((item) => card(item)).join("")}</div>` : `<p class="lede" style="padding:16px">Save a title and it stays on this device.</p>`}</section>`;
 }
 
 function libraryView() {
   const total = state.items.reduce((sum, item) => sum + (item.size || 0), 0);
+  const files = state.items.reduce((sum, item) => sum + videoCount(item), 0);
+  const matched = state.items.filter(hasDetails).length;
+  const query = state.dashQuery || "";
+  const titles = dashTitles(query);
+  const fileRows = dashFiles(query).slice(0, 200);
   const remembered = Boolean(window.showDirectoryPicker);
   return `<section class="library">${banners()}
-    <p class="eyebrow">Library</p>
+    <p class="eyebrow">Dashboard</p>
     <h1>${esc(state.folderName || "No folder yet")}</h1>
+    <p class="note">${state.preview ? "This is a sample shelf. Choose your folder and each file name is looked up for a real poster, rating, year, and director." : "The folder is chosen once. Each file name is checked, then poster, rating, year, and director are filled only when a real match is found."} ${esc(syncLabel())}.</p>
+    <p class="note warn" data-omdb ${state.omdbKeyError ? "" : "hidden"}>OMDb rejected this API key, so those details are not filled in. A title is left blank rather than given a guess.</p>
     <div class="stat-grid">
+      <div class="stat"><b>${esc(state.folderName || "—")}</b><span>Folder</span></div>
       <div class="stat"><b>${movies().length}</b><span>Movies</span></div>
       <div class="stat"><b>${seriesItems().length}</b><span>Series</span></div>
-      <div class="stat"><b>${esc(formatBytes(total))}</b><span>On this device</span></div>
+      <div class="stat"><b>${files}</b><span>Video files</span></div>
+      <div class="stat"><b>${esc(formatBytes(total))}</b><span>Total size</span></div>
+      <div class="stat"><b data-matched>${matched}/${state.items.length}</b><span>Details found</span></div>
     </div>
-    <p class="note">${esc(syncLabel())}. Screenova reads the folder again when you open this page, return to the tab, or press refresh. Add a download and it appears here. Remove one and it leaves.</p>
     <div class="actions">
       <button class="solid" type="button" data-act="refresh">Refresh folder</button>
       <button class="ghost" type="button" data-act="choose">Change folder</button>
       <button class="ghost" type="button" data-act="forget">Remove library</button>
     </div>
-    <p class="note">${remembered ? "This browser can remember the folder after you allow it once." : "This browser cannot remember a folder path. Choose the folder again when you add files."} MP4 and WebM play here. MKV and AVI still appear in the library, with size and details, even when the browser cannot decode them.</p>
+    <label class="dash-filter">
+      <span class="sr">Filter the dashboard</span>
+      <input id="dash-filter" type="search" placeholder="Filter by title, director, or file" value="${esc(query)}" autocomplete="off">
+    </label>
+    <h3>Titles</h3>
+    <div class="dash-scroll">
+      <table class="dash-table">
+        <thead><tr><th>Title</th><th>Type</th><th>Year</th><th>Director</th><th>Rating</th><th>Size</th><th>Files</th><th>Details</th></tr></thead>
+        <tbody data-dash-titles>${titles.length ? titles.map(dashTitleRow).join("") : `<tr><td colspan="8">Nothing in this folder matches that.</td></tr>`}</tbody>
+      </table>
+    </div>
+    <h3>Files</h3>
+    <div class="dash-scroll">
+      <table class="dash-table">
+        <thead><tr><th>File</th><th>Title</th><th>Kind</th><th>Size</th></tr></thead>
+        <tbody data-dash-files>${fileRows.length ? fileRows.map((row) => `<tr><td>${esc(row.path)}</td><td>${esc(row.item.title)}</td><td>${esc(String(row.kind || "").toUpperCase())}</td><td>${esc(formatBytes(row.size))}</td></tr>`).join("") : `<tr><td colspan="4">No video files match that.</td></tr>`}</tbody>
+      </table>
+    </div>
+    <h3>Interface</h3>
+    <div class="actions">
+      <button class="${state.skin === "netflix" ? "solid" : "ghost"}" type="button" data-act="skin" data-skin="netflix">Netflix</button>
+      <button class="${state.skin === "prime" ? "solid" : "ghost"}" type="button" data-act="skin" data-skin="prime">Prime Video</button>
+    </div>
+    <p class="note">${remembered ? "This browser remembers the folder after you allow it once." : "This browser cannot remember a folder path. Choose the folder once per visit."} A typed disk path cannot be read from this page, so the folder picker is the path. Nothing here is a sample title once your folder is connected.</p>
   </section>`;
 }
 
+function paintBackdrop(node, item) {
+  if (!node || !item) return;
+  const image = backdropFor(item).replace(/"/g, "");
+  node.style.setProperty("--hero-image", `url("${image}")`);
+}
+
 function render() {
+  if (!state.skin) {
+    view().innerHTML = gateView();
+    paintChrome();
+    return;
+  }
   const route = state.route;
   let html = progressView();
   if (!(state.scanning && !state.items.length)) {
@@ -418,12 +609,7 @@ function render() {
   const y = window.scrollY;
   view().innerHTML = html;
   paintChrome();
-  document.querySelectorAll("[data-bg]").forEach((node) => {
-    const item = findItem(state.items, node.dataset.bg);
-    if (!item) return;
-    const image = backdropFor(item).replace(/"/g, "");
-    node.style.backgroundImage = `linear-gradient(90deg, rgba(7,7,8,.94), rgba(7,7,8,.62) 48%, rgba(7,7,8,.2)), linear-gradient(180deg, transparent 40%, #070708), url("${image}")`;
-  });
+  document.querySelectorAll("[data-bg]").forEach((node) => paintBackdrop(node, findItem(state.items, node.dataset.bg)));
   if (state.keepScroll) window.scrollTo(0, y);
   else window.scrollTo(0, 0);
 }
@@ -448,12 +634,14 @@ function patchItem(item) {
     if (plot) plot.textContent = blurb(item);
     const poster = document.querySelector(".detail-poster");
     if (poster) poster.src = posterFor(item);
+    const facts = document.querySelector(".detail .facts");
+    if (facts) facts.innerHTML = factMarkup(item);
   }
-  const bg = document.querySelector(`[data-bg="${CSS.escape(item.id)}"]`);
-  if (bg) {
-    const image = backdropFor(item).replace(/"/g, "");
-    bg.style.backgroundImage = `linear-gradient(90deg, rgba(7,7,8,.94), rgba(7,7,8,.62) 48%, rgba(7,7,8,.2)), linear-gradient(180deg, transparent 40%, #070708), url("${image}")`;
-  }
+  const dashRow = document.querySelector(`[data-dash="${CSS.escape(item.id)}"]`);
+  if (dashRow) dashRow.outerHTML = dashTitleRow(item);
+  const matched = document.querySelector("[data-matched]");
+  if (matched) matched.textContent = `${state.items.filter(hasDetails).length}/${state.items.length}`;
+  paintBackdrop(document.querySelector(`[data-bg="${CSS.escape(item.id)}"]`), item);
 }
 
 function updateScanLabel() {
@@ -463,8 +651,12 @@ function updateScanLabel() {
 }
 
 function rememberFiles(entries) {
-  for (const url of state.urlCache.values()) URL.revokeObjectURL(url);
-  state.urlCache.clear();
+  const keep = state.player?.version?.filePath;
+  for (const [path, url] of state.urlCache) {
+    if (path !== keep) URL.revokeObjectURL(url);
+  }
+  const kept = keep ? state.urlCache.get(keep) : "";
+  state.urlCache = new Map(kept ? [[keep, kept]] : []);
   state.fileMap = new Map();
   for (const entry of entries) if (entry.file) state.fileMap.set(entry.relativePath, entry.file);
 }
@@ -482,6 +674,14 @@ function mergePrevious(items) {
     if (!item.posterUrl && older.posterUrl) item.posterUrl = older.posterUrl;
     if (!item.backdropUrl && older.backdropUrl) item.backdropUrl = older.backdropUrl;
     if (!(item.genres || []).length && older.genres?.length) item.genres = [...older.genres];
+    if (!item.director && older.director) item.director = older.director;
+    if (!item.actors && older.actors) item.actors = older.actors;
+    if (!item.released && older.released) item.released = older.released;
+    if (!item.rottenTomatoes && older.rottenTomatoes) item.rottenTomatoes = older.rottenTomatoes;
+    if (!item.metacritic && older.metacritic) item.metacritic = older.metacritic;
+    if (!item.imdbId && older.imdbId) item.imdbId = older.imdbId;
+    if (!item.metaSource && older.metaSource) item.metaSource = older.metaSource;
+    if (older.omdbChecked) item.omdbChecked = true;
     item.credits = older.credits || item.credits || [];
     if (item.type !== "series" || older.type !== "series") continue;
     const oldEpisodes = new Map();
@@ -524,14 +724,23 @@ async function adopt(entries, folderName, quiet) {
   await idbSet("kv", "catalog", { items: cacheItems(items), folderName: state.folderName, scannedAt: state.lastSync });
   render();
   if (previous && previous !== next) toast("Library updated from your folder");
-  items.forEach((item, index) => enrichItem(item, (updated) => {
-    patchItem(updated);
-    scheduleSave();
-  }, index < 6 ? 0 : 1));
+  items.forEach((item, index) => enrichItem(item, onMeta, index < 6 ? 0 : 1));
 }
 
+let scanPromise = null;
+
 async function scanHandle(handle, quiet = false) {
-  if (state.scanning) return;
+  if (scanPromise) return scanPromise;
+  const job = runScan(handle, quiet);
+  scanPromise = job;
+  try {
+    return await job;
+  } finally {
+    if (scanPromise === job) scanPromise = null;
+  }
+}
+
+async function runScan(handle, quiet = false) {
   state.scanning = true;
   state.scanCount = 0;
   state.connected = true;
@@ -554,6 +763,17 @@ async function scanHandle(handle, quiet = false) {
   }
 }
 
+let skinLocked = false;
+
+async function chooseSkin(skin) {
+  skinLocked = true;
+  state.skin = skin === "prime" || skin === "netflix" ? skin : "";
+  await idbSet("kv", "settings", { skin: state.skin });
+  applySkin();
+  if (!state.skin) location.hash = "#/";
+  render();
+}
+
 async function chooseFolder() {
   if (window.showDirectoryPicker) {
     try {
@@ -567,6 +787,46 @@ async function chooseFolder() {
     }
   }
   document.getElementById("folder-input").click();
+}
+
+async function allowFolder() {
+  const handle = await idbGet("kv", "handle");
+  if (handle?.requestPermission) {
+    let permission = "denied";
+    try { permission = await handle.requestPermission({ mode: "read" }); } catch { permission = "denied"; }
+    if (permission === "granted") {
+      state.permissionMode = "handle";
+      state.needsPermission = false;
+      await scanHandle(handle, Boolean(state.items.length));
+      return;
+    }
+  }
+  await chooseFolder();
+}
+
+async function ensurePlaybackFiles() {
+  if (state.preview) return "preview";
+  if (state.fileMap.size) return "ready";
+  if (scanPromise) {
+    await scanPromise;
+    if (state.fileMap.size) return "ready";
+  }
+  const handle = await idbGet("kv", "handle");
+  if (handle?.requestPermission) {
+    let permission = "prompt";
+    try { permission = await handle.queryPermission({ mode: "read" }); } catch { permission = "prompt"; }
+    if (permission !== "granted") {
+      try { permission = await handle.requestPermission({ mode: "read" }); } catch { permission = "denied"; }
+    }
+    if (permission === "granted") {
+      state.permissionMode = "handle";
+      state.needsPermission = false;
+      await scanHandle(handle, true);
+      return state.fileMap.size ? "ready" : "missing";
+    }
+    return "denied";
+  }
+  return state.fileMap.size ? "ready" : "missing";
 }
 
 async function rescanIfAllowed() {
@@ -617,16 +877,41 @@ async function forgetFolder() {
   render();
 }
 
+const MIME = {
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  webm: "video/webm",
+  ogv: "video/ogg",
+  ogg: "video/ogg",
+  mov: "video/quicktime",
+  mkv: "video/x-matroska",
+};
+
+function browserCanPlay(ext) {
+  const mime = MIME[String(ext || "").toLowerCase()];
+  if (!mime) return false;
+  const probe = document.createElement("video");
+  const support = probe.canPlayType(mime);
+  return support === "probably" || support === "maybe";
+}
+
+function orderedVersions(versions) {
+  const playable = [];
+  const rest = [];
+  for (const version of versions || []) (browserCanPlay(version.ext) ? playable : rest).push(version);
+  return [...playable, ...rest];
+}
+
 function primaryVersion(item, episode, filePath) {
+  const pools = episode?.versions?.length
+    ? episode.versions
+    : [...(item.versions || []), ...(item.extras || [])];
   if (filePath) {
-    const pools = item.type === "movie"
-      ? [...item.versions, ...(item.extras || [])]
-      : item.seasons.flatMap((season) => season.episodes.flatMap((entry) => entry.versions));
-    const found = pools.find((version) => version.filePath === filePath);
+    const found = pools.find((version) => version.filePath === filePath)
+      || (item.extras || []).find((version) => version.filePath === filePath);
     if (found) return found;
   }
-  if (episode?.versions?.length) return episode.versions[0];
-  return item.versions?.[0];
+  return orderedVersions(pools)[0] || null;
 }
 
 function clock(seconds) {
@@ -638,98 +923,456 @@ function clock(seconds) {
   return `${minutes}:${String(remain).padStart(2, "0")}`;
 }
 
-function srtToVtt(text) {
-  return `WEBVTT\n\n${text.replace(/^\uFEFF/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2")}`;
-}
+let playbackUrl = "";
+let playerToken = 0;
 
 function closePlayer() {
+  playerToken += 1;
   const root = document.getElementById("player");
-  const video = root.querySelector("video");
-  if (video) {
-    video.pause();
-    video.removeAttribute("src");
-    video.load();
+  const media = state.player?.media;
+  if (media) {
+    try { media.pause(); } catch { /* already stopped */ }
+    try {
+      media.removeAttribute("src");
+      media.load?.();
+    } catch { /* the element is going away */ }
   }
+  for (const url of state.player?.urls || []) URL.revokeObjectURL(url);
+  if (playbackUrl) URL.revokeObjectURL(playbackUrl);
+  playbackUrl = "";
   root.hidden = true;
   root.innerHTML = "";
   state.player = null;
 }
 
-async function openPlayer(item, episode, version) {
-  const file = state.fileMap.get(version.filePath);
-  if (!file) {
-    toast("Choose the folder to play this file");
-    if (state.needsPermission || !state.connected) await chooseFolder();
+function loadVersion(video, file, version) {
+  if (playbackUrl) URL.revokeObjectURL(playbackUrl);
+  playbackUrl = URL.createObjectURL(file);
+  const source = document.createElement("source");
+  source.src = playbackUrl;
+  const mime = file.type || MIME[String(version.ext || "").toLowerCase()] || "";
+  if (mime && browserCanPlay(version.ext)) source.type = mime;
+  video.replaceChildren(source);
+  video.load();
+}
+
+function sidecarPaths(entry, episode, item) {
+  const listed = entry?.subtitlePaths?.length ? entry.subtitlePaths : (episode?.subtitlePaths || []);
+  if (listed.length) return listed;
+  const one = entry?.subtitlePath || episode?.subtitlePath || item?.subtitlePath;
+  return one ? [one] : [];
+}
+
+function folderSubtitleRows(query) {
+  const q = normalizeKey(query);
+  const rows = [];
+  for (const [path, file] of state.fileMap) {
+    if (!/\.(srt|vtt|ass|ssa)$/i.test(path)) continue;
+    if (q && !normalizeKey(path).includes(q)) continue;
+    rows.push({ path, file, name: path.split("/").pop() });
+    if (rows.length >= 40) break;
+  }
+  rows.sort((a, b) => a.name.localeCompare(b.name));
+  return rows;
+}
+
+function renderSubResults(query) {
+  const box = document.querySelector("[data-sub-results]");
+  if (!box || !state.player) return;
+  const trimmed = String(query || "").trim();
+  const rows = trimmed
+    ? folderSubtitleRows(trimmed)
+    : sidecarPaths(state.player.version, state.player.episode, state.player.item)
+      .map((path) => ({ path, name: path.split("/").pop(), file: state.fileMap.get(path) }))
+      .filter((row) => row.file);
+  if (!rows.length) {
+    box.innerHTML = `<p class="sub-empty">${trimmed ? "No subtitle in this folder matches that." : "No subtitle file is sitting beside this title. Search the folder, or upload one."}</p>`;
     return;
   }
+  box.innerHTML = rows.map((row) => {
+    const label = languageFromName(row.name).label;
+    const on = state.player.activeSub === row.path ? " on" : "";
+    return `<button type="button" class="${on}" data-act="use-sub" data-path="${esc(row.path)}">${esc(label)} · ${esc(row.name)}</button>`;
+  }).join("");
+}
+
+function listedTracks(media) {
+  const audio = [];
+  const subs = [];
+  const list = media?.audioTracks;
+  if (list) {
+    for (let i = 0; i < list.length; i += 1) {
+      const track = list[i];
+      audio.push({ index: i, label: track.label || track.language || `Audio ${i + 1}`, on: Boolean(track.enabled) });
+    }
+  }
+  const texts = media?.textTracks;
+  if (texts) {
+    for (let i = 0; i < texts.length; i += 1) {
+      const track = texts[i];
+      if (track.kind === "metadata") continue;
+      subs.push({ index: i, label: track.label || track.language || `Subtitles ${i + 1}`, on: track.mode === "showing" });
+    }
+  }
+  const engine = Array.isArray(state.player?.engineTracks) ? state.player.engineTracks : [];
+  if (audio.length < 2) {
+    const found = engine.filter((track) => /audio/i.test(`${track.type || ""} ${track.kind || ""}`));
+    if (found.length) {
+      audio.length = 0;
+      found.forEach((track, index) => audio.push({
+        index,
+        id: track.id,
+        label: track.label || track.language || track.name || `Audio ${index + 1}`,
+        on: Boolean(track.active || track.selected || track.enabled),
+      }));
+    }
+  }
+  if (!subs.length) {
+    engine.filter((track) => /sub|caption|text/i.test(`${track.type || ""} ${track.kind || ""}`)).forEach((track, index) => {
+      subs.push({
+        index,
+        id: track.id,
+        label: track.label || track.language || track.name || `Subtitles ${index + 1}`,
+        on: Boolean(track.active || track.selected || track.mode === "showing"),
+      });
+    });
+  }
+  return { audio, subs };
+}
+
+function paintTracks() {
+  const audioBox = document.querySelector("[data-audio]");
+  const subBox = document.querySelector("[data-subs]");
+  if (!audioBox || !subBox || !state.player?.media) return;
+  const { audio, subs } = listedTracks(state.player.media);
+  audioBox.hidden = audio.length < 2;
+  audioBox.innerHTML = audio.length < 2 ? "" : `<span>Audio</span>${audio.map((track) => `<button type="button" class="${track.on ? "on" : ""}" data-act="audio-track" data-index="${track.index}">${esc(track.label)}</button>`).join("")}`;
+  subBox.hidden = !subs.length;
+  const offOn = subs.some((track) => track.on) ? "" : "on";
+  subBox.innerHTML = subs.length
+    ? `<span>In this video</span><button type="button" class="${offOn}" data-act="text-track" data-index="-1">Off</button>${subs.map((track) => `<button type="button" class="${track.on ? "on" : ""}" data-act="text-track" data-index="${track.index}">${esc(track.label)}</button>`).join("")}`
+    : "";
+}
+
+async function openPlayer(item, episode, version) {
+  if (state.preview) {
+    toast("This is a sample layout. Add your folder to play the movies and series on this device.");
+    return;
+  }
+  const pool = episode?.versions?.length ? episode.versions : [...(item.versions || []), ...(item.extras || [])];
+  const queue = orderedVersions(pool.length ? pool : [version]);
+  const start = queue.findIndex((entry) => entry.filePath === version.filePath);
+  const versions = start > 0 ? [queue[start], ...queue.filter((_, index) => index !== start)] : (queue.length ? queue : [version]);
+  const access = await ensurePlaybackFiles();
+  if (access !== "ready") {
+    if (access === "missing") {
+      toast("Add the folder once. Every movie and series in it plays after that, without asking for a path again.");
+      await chooseFolder();
+    } else if (access !== "preview") {
+      toast("Allow the folder once. After that, every title in it plays without asking again.");
+    }
+  }
+  if (!versions.some((entry) => state.fileMap.has(entry.filePath))) {
+    if (access === "ready") toast("That file is no longer in the folder.");
+    return;
+  }
+  const token = ++playerToken;
   const root = document.getElementById("player");
   const title = episode ? `${item.title} · ${episode.title}` : item.title;
-  root.innerHTML = `<div class="player-top"><button type="button" data-act="close-player">Close</button><strong>${esc(title)}</strong><span>${esc(version.quality || version.ext.toUpperCase())} · ${esc(formatBytes(version.size))}</span></div>
-    <video playsinline></video>
-    <p class="player-note" hidden></p>
+  root.innerHTML = `<div class="player-top"><button type="button" data-act="close-player">Close</button><strong>${esc(title)}</strong><span data-quality></span></div>
+    <div class="stage"></div>
+    <p class="player-note">Opening the file…</p>
     <div class="controls">
-      <button type="button" data-act="toggle">Play</button>
+      <button type="button" data-act="toggle">${esc(copy().play)}</button>
       <button type="button" data-act="back10">-10s</button>
       <input class="seek" type="range" min="0" max="1000" value="0" aria-label="Seek">
       <span class="time">0:00</span>
       <button type="button" data-act="fwd10">+10s</button>
       <button type="button" data-act="full">Full</button>
+    </div>
+    <div class="sub-tools">
+      <div class="track-row" data-audio hidden></div>
+      <div class="track-row" data-subs hidden></div>
+      <div class="sub-search-row">
+        <input id="sub-search" type="search" placeholder="Search subtitles in your folder" autocomplete="off">
+        <button type="button" data-act="upload-sub">Upload subtitle</button>
+      </div>
+      <div class="sub-list" data-sub-results></div>
     </div>`;
   root.hidden = false;
-  const video = root.querySelector("video");
+  const stage = root.querySelector(".stage");
   const note = root.querySelector(".player-note");
   const seek = root.querySelector(".seek");
   const time = root.querySelector(".time");
   const toggle = root.querySelector("[data-act='toggle']");
-  state.player = { item, episode, version, video };
-  video.src = fileUrl(version.filePath);
-  const saved = state.progress.get(version.filePath);
+  const quality = root.querySelector("[data-quality]");
+  const controls = root.querySelector(".controls");
+  let index = 0;
+  let failed = false;
+  state.player = {
+    item,
+    episode,
+    version: versions[0],
+    media: null,
+    video: null,
+    urls: [],
+    engineTracks: [],
+    activeSub: "",
+  };
   openPlayer.savedAt = 0;
-  video.addEventListener("loadedmetadata", () => {
-    if (saved?.time && (!video.duration || saved.time < video.duration - 5)) video.currentTime = saved.time;
-  });
-  video.addEventListener("timeupdate", () => {
-    const duration = video.duration || saved?.duration || 0;
-    if (duration) seek.value = String(Math.round((video.currentTime / duration) * 1000));
-    time.textContent = `${clock(video.currentTime)} / ${clock(duration)}`;
-    if (video.currentTime > 2 && Date.now() - openPlayer.savedAt > 4000) {
-      openPlayer.savedAt = Date.now();
-      const row = { path: version.filePath, time: video.currentTime, duration, updated: Date.now() };
-      state.progress.set(version.filePath, row);
-      idbSet("progress", version.filePath, row);
-    }
-  });
-  video.addEventListener("pause", () => {
-    const row = { path: version.filePath, time: video.currentTime, duration: video.duration || 0, updated: Date.now() };
-    state.progress.set(version.filePath, row);
-    idbSet("progress", version.filePath, row);
-  });
-  video.addEventListener("play", () => { toggle.textContent = "Pause"; });
-  video.addEventListener("pause", () => { toggle.textContent = "Play"; });
-  video.addEventListener("error", () => {
+
+  const showFailure = () => {
     note.hidden = false;
-    note.textContent = playableExt(version.ext)
-      ? "This file could not be played."
-      : `${version.ext.toUpperCase()} is in your library, but this browser usually cannot play it. The title, size, and details stay visible. MP4 and WebM play here.`;
-  });
-  video.addEventListener("ended", () => {
-    const next = nextEpisode(item, episode);
-    if (next) toast("Next episode is ready");
-  });
-  const subtitle = version.subtitlePath || episode?.subtitlePath || item.subtitlePath;
-  const subFile = subtitle ? state.fileMap.get(subtitle) : null;
-  if (subFile) {
-    let text = await subFile.text();
-    if (/\.srt$/i.test(subtitle)) text = srtToVtt(text);
-    const track = document.createElement("track");
-    track.kind = "subtitles";
-    track.label = "Subtitles";
-    track.srclang = "en";
-    track.default = true;
-    track.src = URL.createObjectURL(new Blob([text], { type: "text/vtt" }));
-    video.appendChild(track);
-  }
-  try { await video.play(); } catch { /* user can press play */ }
+    note.textContent = "This copy could not play in this browser. If the folder has another copy of the same title, that one is tried next.";
+  };
+  const rememberProgress = (media, entry, force) => {
+    if (!entry || token !== playerToken) return;
+    const current = Number(media.currentTime) || 0;
+    const duration = Number.isFinite(media.duration) ? media.duration : 0;
+    if (!force && (current < 1 || Date.now() - openPlayer.savedAt < 4000)) return;
+    openPlayer.savedAt = Date.now();
+    const row = { path: entry.filePath, time: current, duration, updated: Date.now() };
+    state.progress.set(entry.filePath, row);
+    idbSet("progress", entry.filePath, row);
+  };
+  const selectAudio = (trackIndex) => {
+    const media = state.player?.media;
+    if (!media) return;
+    const list = media.audioTracks;
+    if (list && list.length > trackIndex) {
+      for (let i = 0; i < list.length; i += 1) list[i].enabled = i === trackIndex;
+      paintTracks();
+      return;
+    }
+    const tracks = (state.player.engineTracks || []).filter((track) => /audio/i.test(`${track.type || ""} ${track.kind || ""}`));
+    const api = media.player || media;
+    if (tracks[trackIndex] && typeof api.setAudioTrack === "function") api.setAudioTrack(tracks[trackIndex].id ?? trackIndex);
+    paintTracks();
+  };
+  const selectText = (trackIndex) => {
+    const media = state.player?.media;
+    if (!media) return;
+    const texts = media.textTracks;
+    if (texts && texts.length) {
+      for (let i = 0; i < texts.length; i += 1) {
+        if (texts[i].kind === "metadata") continue;
+        texts[i].mode = i === trackIndex ? "showing" : "disabled";
+      }
+    }
+    const api = media.player || media;
+    if (typeof api.setSubtitleTrack === "function") {
+      if (trackIndex < 0) api.setSubtitleTrack(null);
+      else {
+        const tracks = (state.player.engineTracks || []).filter((track) => /sub|caption|text/i.test(`${track.type || ""} ${track.kind || ""}`));
+        if (tracks[trackIndex]) api.setSubtitleTrack(tracks[trackIndex].id ?? trackIndex);
+      }
+    }
+    paintTracks();
+  };
+  const addSubtitle = async (file, path) => {
+    const media = state.player?.media;
+    if (!file || token !== playerToken) return;
+    if (!media) {
+      state.player.pendingSub = { file, path };
+      return;
+    }
+    const name = path || file.name || "subtitle.vtt";
+    const spoken = languageFromName(name);
+    try {
+      const vtt = await vttFile(file);
+      const api = typeof media.addSubtitleFile === "function" ? media : media.player;
+      if (api && typeof api.addSubtitleFile === "function") await api.addSubtitleFile(vtt);
+      else {
+        const url = URL.createObjectURL(vtt);
+        state.player.urls.push(url);
+        const track = document.createElement("track");
+        track.kind = "subtitles";
+        track.label = spoken.label;
+        track.srclang = spoken.code;
+        track.default = true;
+        track.src = url;
+        media.appendChild(track);
+        if (track.track) track.track.mode = "showing";
+      }
+      state.player.activeSub = path || name;
+      paintTracks();
+      renderSubResults(document.getElementById("sub-search")?.value || "");
+    } catch (error) {
+      console.error(error);
+      toast("That subtitle could not be read.");
+    }
+  };
+  state.player.selectAudio = selectAudio;
+  state.player.selectText = selectText;
+  state.player.addSubtitle = addSubtitle;
+
+  const goNext = () => {
+    if (failed || token !== playerToken) return;
+    failed = true;
+    index += 1;
+    if (index < versions.length) startVersion();
+    else showFailure();
+  };
+  const wireMedia = (media, entry) => {
+    let attached = false;
+    const attachDefault = () => {
+      if (attached || token !== playerToken) return;
+      attached = true;
+      const path = sidecarPaths(entry, episode, item)[0];
+      const file = path ? state.fileMap.get(path) : null;
+      if (file) addSubtitle(file, path);
+      else renderSubResults("");
+    };
+    media.addEventListener("timeupdate", () => {
+      if (token !== playerToken) return;
+      const duration = Number.isFinite(media.duration) ? media.duration : 0;
+      const current = Number(media.currentTime) || 0;
+      if (duration && seek) seek.value = String(Math.round((current / duration) * 1000));
+      if (time) time.textContent = `${clock(current)} / ${clock(duration)}`;
+      rememberProgress(media, state.player?.version, false);
+    });
+    media.addEventListener("pause", () => {
+      if (toggle) toggle.textContent = copy().play;
+      rememberProgress(media, state.player?.version, true);
+    });
+    media.addEventListener("playing", () => {
+      if (token !== playerToken) return;
+      note.hidden = true;
+      if (toggle) toggle.textContent = "Pause";
+      attachDefault();
+      paintTracks();
+    });
+    media.addEventListener("loadedmetadata", () => {
+      attachDefault();
+      paintTracks();
+      const saved = state.progress.get(entry.filePath);
+      if (saved?.time > 1 && Number.isFinite(media.duration) && saved.time < media.duration - 5 && media.tagName === "VIDEO") {
+        try { media.currentTime = saved.time; } catch { /* keep the start */ }
+      }
+    });
+    media.addEventListener("trackschange", (event) => {
+      if (Array.isArray(event.detail)) state.player.engineTracks = event.detail;
+      paintTracks();
+    });
+    media.addEventListener("audiotrackchange", () => paintTracks());
+    media.addEventListener("subtitletrackchange", () => paintTracks());
+    media.textTracks?.addEventListener?.("addtrack", () => paintTracks());
+    media.audioTracks?.addEventListener?.("addtrack", () => paintTracks());
+    media.addEventListener("ended", () => {
+      if (token !== playerToken) return;
+      const next = nextEpisode(item, episode);
+      const nextVersion = orderedVersions(next?.versions)[0];
+      if (next && nextVersion && state.fileMap.has(nextVersion.filePath)) openPlayer(item, next, nextVersion);
+    });
+    if (media.tagName === "VIDEO") {
+      media.addEventListener("error", async () => {
+        if (token !== playerToken || failed || media.dataset.handed === "1") return;
+        media.dataset.handed = "1";
+        const file = state.fileMap.get(entry.filePath);
+        if (file) {
+          note.hidden = false;
+          note.textContent = "Trying the full player for this file…";
+          const opened = await playMovi(file, entry);
+          if (opened) return;
+        }
+        goNext();
+      });
+    } else {
+      media.addEventListener("filerevoked", () => {
+        state.fileMap = new Map();
+        state.needsPermission = true;
+        toast("The browser closed the folder. Allow it once, and every title plays again.");
+        render();
+      });
+      const openedAt = Date.now();
+      media.addEventListener("errordisplay", (event) => {
+        const detail = event.detail || {};
+        if (detail.canRetry || detail.canTrySoftware) return;
+        if (Date.now() - openedAt < 1500) return;
+        goNext();
+      });
+    }
+  };
+  const playMovi = async (file, entry) => {
+    if (token !== playerToken) return false;
+    try {
+      await loadMovi();
+    } catch (error) {
+      console.error(error);
+      return false;
+    }
+    if (token !== playerToken) return false;
+    const el = document.createElement("movi-player");
+    el.controls = true;
+    el.playsinline = true;
+    el.fallback = "native";
+    el.engine = "wasm native";
+    el.wasmurl = moviWasmUrl();
+    el.subtitlepicker = true;
+    el.nolinkwarning = true;
+    el.themecolor = state.skin === "prime" ? "#00a8e1" : "#e50914";
+    el.title = title;
+    const saved = state.progress.get(entry.filePath);
+    if (saved?.time > 1) el.startat = saved.time;
+    controls.hidden = true;
+    stage.replaceChildren(el);
+    state.player.media = el;
+    state.player.video = el;
+    state.player.version = entry;
+    wireMedia(el, entry);
+    if (state.player.pendingSub) {
+      const pending = state.player.pendingSub;
+      state.player.pendingSub = null;
+      addSubtitle(pending.file, pending.path);
+    }
+    el.src = file;
+    try { await el.play(); } catch { /* the player controls stay on screen */ }
+    return true;
+  };
+  const playNative = (file, entry) => {
+    const video = document.createElement("video");
+    video.playsInline = true;
+    video.preload = "auto";
+    controls.hidden = false;
+    stage.replaceChildren(video);
+    state.player.media = video;
+    state.player.video = video;
+    state.player.version = entry;
+    wireMedia(video, entry);
+    if (state.player.pendingSub) {
+      const pending = state.player.pendingSub;
+      state.player.pendingSub = null;
+      addSubtitle(pending.file, pending.path);
+    }
+    loadVersion(video, file, entry);
+    video.play().catch(() => {});
+  };
+  const startVersion = async () => {
+    if (token !== playerToken) return;
+    failed = false;
+    const entry = versions[index];
+    const file = entry ? state.fileMap.get(entry.filePath) : null;
+    if (!entry || !file) {
+      index += 1;
+      if (index < versions.length) return startVersion();
+      showFailure();
+      return;
+    }
+    state.player.version = entry;
+    quality.textContent = `${entry.quality || String(entry.ext || "").toUpperCase()} · ${formatBytes(entry.size)}`;
+    note.hidden = false;
+    note.textContent = index ? "That copy could not play. Opening another…" : "Opening the file…";
+    renderSubResults(document.getElementById("sub-search")?.value || "");
+    const demux = await fileWantsDemux(file, entry.ext);
+    if (token !== playerToken) return;
+    if (demux) {
+      const opened = await playMovi(file, entry);
+      if (!opened) goNext();
+      return;
+    }
+    playNative(file, entry);
+  };
+  await startVersion();
 }
 
 function nextEpisode(item, episode) {
@@ -757,7 +1400,10 @@ async function onClick(event) {
   const button = event.target.closest("[data-act]");
   if (!button) return;
   const act = button.dataset.act;
+  if (act === "skin") return chooseSkin(button.dataset.skin);
+  if (act === "reset-skin") return chooseSkin("");
   if (act === "choose") return chooseFolder();
+  if (act === "allow") return allowFolder();
   if (act === "refresh") return refreshLibrary();
   if (act === "forget") return forgetFolder();
   if (act === "open") {
@@ -780,7 +1426,7 @@ async function onClick(event) {
     if (state.myList.has(id)) state.myList.delete(id);
     else state.myList.add(id);
     await idbSet("kv", "list", [...state.myList]);
-    button.textContent = state.myList.has(id) ? "In My List" : "My List";
+    button.textContent = state.myList.has(id) ? copy().listOn : copy().listAdd;
     if (state.route.name === "list") render();
     return;
   }
@@ -793,8 +1439,26 @@ async function onClick(event) {
     return;
   }
   if (act === "close-player") return closePlayer();
+  if (act === "upload-sub") {
+    document.getElementById("sub-file").click();
+    return;
+  }
   if (!state.player) return;
+  if (act === "use-sub") {
+    const file = state.fileMap.get(button.dataset.path);
+    if (file) await state.player.addSubtitle(file, button.dataset.path);
+    return;
+  }
+  if (act === "audio-track") {
+    state.player.selectAudio(Number(button.dataset.index));
+    return;
+  }
+  if (act === "text-track") {
+    state.player.selectText(Number(button.dataset.index));
+    return;
+  }
   const video = state.player.video;
+  if (!video) return;
   if (act === "toggle") video.paused ? video.play() : video.pause();
   if (act === "back10") video.currentTime = Math.max(0, video.currentTime - 10);
   if (act === "fwd10") video.currentTime = Math.min(video.duration || video.currentTime + 10, video.currentTime + 10);
@@ -812,11 +1476,13 @@ function onPlayerInput(event) {
 }
 
 async function restore() {
-  const [catalog, list, progress] = await Promise.all([
+  const [catalog, list, progress, settings] = await Promise.all([
     idbGet("kv", "catalog"),
     idbGet("kv", "list"),
     idbAll("progress"),
+    idbGet("kv", "settings"),
   ]);
+  if (!skinLocked && (settings?.skin === "netflix" || settings?.skin === "prime")) state.skin = settings.skin;
   if (catalog?.items?.length) {
     state.items = catalog.items;
     state.folderName = catalog.folderName || "";
@@ -826,6 +1492,7 @@ async function restore() {
   state.myList = new Set(list || []);
   for (const row of progress || []) if (row?.path) state.progress.set(row.path, row);
   const params = new URLSearchParams(location.search);
+  if (!skinLocked && (params.get("skin") === "netflix" || params.get("skin") === "prime")) state.skin = params.get("skin");
   if (params.get("preview") === "1") {
     const { previewLibrary } = await import("./preview.js");
     state.items = previewLibrary();
@@ -840,10 +1507,7 @@ async function restore() {
   if (!handle?.queryPermission) {
     if (state.items.length) state.needsPermission = true;
     if (state.items.length) {
-      state.items.forEach((item, index) => enrichItem(item, (updated) => {
-        patchItem(updated);
-        scheduleSave();
-      }, index < 6 ? 0 : 1));
+      state.items.forEach((item, index) => enrichItem(item, onMeta, index < 6 ? 0 : 1));
     }
     render();
     return;
@@ -866,6 +1530,20 @@ async function restore() {
 function bind() {
   document.body.addEventListener("click", onClick);
   document.body.addEventListener("input", (event) => {
+    if (event.target.id === "dash-filter") {
+      state.dashQuery = event.target.value;
+      const titles = document.querySelector("[data-dash-titles]");
+      const files = document.querySelector("[data-dash-files]");
+      const found = dashTitles(state.dashQuery);
+      const fileRows = dashFiles(state.dashQuery).slice(0, 200);
+      if (titles) titles.innerHTML = found.length ? found.map(dashTitleRow).join("") : `<tr><td colspan="8">Nothing in this folder matches that.</td></tr>`;
+      if (files) files.innerHTML = fileRows.length ? fileRows.map((row) => `<tr><td>${esc(row.path)}</td><td>${esc(row.item.title)}</td><td>${esc(String(row.kind || "").toUpperCase())}</td><td>${esc(formatBytes(row.size))}</td></tr>`).join("") : `<tr><td colspan="4">No video files match that.</td></tr>`;
+      return;
+    }
+    if (event.target.id === "sub-search") {
+      renderSubResults(event.target.value);
+      return;
+    }
     if (event.target.id === "search" || event.target.id === "search-page") onSearchInput(event);
     if (event.target.classList?.contains("seek")) onPlayerInput(event);
   });
@@ -884,6 +1562,12 @@ function bind() {
     const folderName = files[0].webkitRelativePath?.split("/")[0] || "Library";
     await adopt(entries, folderName, false);
   });
+  document.getElementById("sub-file").addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !state.player?.addSubtitle) return;
+    await state.player.addSubtitle(file, file.name);
+  });
   window.addEventListener("hashchange", () => {
     state.route = readRoute();
     state.keepScroll = false;
@@ -896,6 +1580,7 @@ function bind() {
   document.addEventListener("keydown", (event) => {
     if (!state.player || event.target.matches("input, textarea")) return;
     if (event.key === "Escape") closePlayer();
+    if (state.player.media?.tagName === "MOVI-PLAYER") return;
     if (event.key === " ") {
       event.preventDefault();
       state.player.video.paused ? state.player.video.play() : state.player.video.pause();
