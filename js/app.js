@@ -12,7 +12,7 @@ import {
   shortText,
   tidyTitle,
 } from "./library.js?v=12";
-import { enrichItem, remotePoster } from "./metadata.js?v=5";
+import { enrichItem, remotePoster } from "./metadata.js?v=6";
 import { fileWantsDemux, languageFromName, loadMovi, moviWasmUrl, vttFile } from "./playback.js";
 import { collectFromFileList, collectFromHandle } from "./scan.js";
 
@@ -718,6 +718,13 @@ function patchItem(item) {
     const cap = node.querySelector(".cap");
     if (cap) cap.textContent = shownName(item);
   });
+  const name = shownName(item);
+  document.querySelectorAll("img").forEach((image) => {
+    if (image.dataset.show !== name) return;
+    if (!(image.currentSrc || image.src || "").startsWith("data:")) return;
+    applyImage(image, item, image.dataset.wide === "1");
+  });
+  document.querySelectorAll(`[data-bg="${CSS.escape(item.id)}"], [data-hero="${CSS.escape(item.id)}"]`).forEach((node) => paintBackdrop(node, item));
   const heroNode = document.querySelector(`[data-hero="${CSS.escape(item.id)}"]`);
   if (heroNode) {
     const desc = heroNode.querySelector("[data-desc]");
@@ -805,6 +812,9 @@ async function adopt(entries, folderName, quiet) {
     state.needsPermission = false;
     state.lastSync = Date.now();
     paintChrome();
+    state.items.forEach((item, index) => {
+      if (!item.posterPath && !item.posterUrl) enrichItem(item, onMeta, index < 8 ? 0 : 1);
+    });
     return;
   }
   mergePrevious(items);

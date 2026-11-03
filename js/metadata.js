@@ -237,17 +237,50 @@ async function wikiImage(title, type) {
   return artworkUrl(page?.thumbnail?.source || "");
 }
 
+async function omdbPoster(title, type) {
+  const kind = type === "series" ? "series" : "movie";
+  const search = await fetchJson(omdbUrl({ s: title, type: kind }));
+  const hit = (search?.Search || []).find((entry) => titleScore(entry.Title, title) >= 0.45);
+  if (!hit?.imdbID) return "";
+  const full = await fetchJson(omdbUrl({ i: hit.imdbID }));
+  const poster = clean(full?.Poster);
+  return /^https?:\/\//i.test(poster) ? artworkUrl(poster) : "";
+}
+
+async function cinemetaPoster(title, type) {
+  const kind = type === "series" ? "series" : "movie";
+  const search = await fetchJson(`https://v3-cinemeta.strem.io/catalog/${kind}/top/search=${encodeURIComponent(title)}.json`);
+  const hit = (search?.metas || []).find((meta) => meta.poster && titleScore(meta.name, title) >= 0.45);
+  return hit?.poster ? artworkUrl(hit.poster) : "";
+}
+
+async function tvmazePoster(title) {
+  const results = await fetchJson(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(title)}`);
+  const show = (results || []).map((entry) => entry.show).find((entry) => entry?.image && titleScore(entry.name, title) >= 0.45);
+  return artworkUrl(show?.image?.original || show?.image?.medium || "");
+}
+
+function posterNames(item) {
+  return [...new Set([item?.sourceName, item?.title].map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 2);
+}
+
+async function posterChoices(item) {
+  const names = posterNames(item);
+  if (!names.length) return [];
+  const type = item.type === "series" ? "series" : "movie";
+  const jobs = [];
+  for (const title of names) {
+    const entity = type === "series" ? "tvSeason" : "movie";
+    jobs.push(itunesArt(title, entity, "in"), itunesArt(title, entity, "us"), cinemetaPoster(title, type), wikiImage(title, type));
+    jobs.push(type === "series" ? tvmazePoster(title) : omdbPoster(title, type));
+  }
+  const found = await Promise.all(jobs);
+  return [...new Set(found.filter(Boolean))];
+}
+
 async function loosePoster(item) {
-  const title = String(item?.title || "").trim();
-  if (!title) return "";
-  const entity = item.type === "series" ? "tvSeason" : "movie";
-  const other = item.type === "series" ? "movie" : "tvSeason";
-  const found = await Promise.all([
-    itunesArt(title, entity, "in"),
-    itunesArt(title, entity, "us"),
-    itunesArt(title, other, "us"),
-  ]);
-  return found.find(Boolean) || wikiImage(title, item.type);
+  const found = await posterChoices(item);
+  return found[0] || "";
 }
 
 async function fromItunes(item) {
@@ -463,10 +496,11 @@ function paintPoster(item, onUpdate) {
   if (item.posterPath || item.posterUrl) return Promise.resolve(false);
   return enqueue(async () => {
     if (item.posterPath || item.posterUrl) return false;
-    const url = await loosePoster(item);
-    if (!url || item.posterPath || item.posterUrl) return false;
-    item.posterUrl = url;
-    if (!item.backdropUrl) item.backdropUrl = url;
+    const urls = await posterChoices(item);
+    if (!urls.length || item.posterPath || item.posterUrl) return false;
+    item.posterUrl = urls[0];
+    item.posterAlts = urls.slice(1);
+    if (!item.backdropUrl) item.backdropUrl = urls[0];
     if (onUpdate) onUpdate(item);
     return true;
   }, 0);
