@@ -12,7 +12,7 @@ import {
   shortText,
   tidyTitle,
 } from "./library.js?v=12";
-import { enrichItem, remotePoster } from "./metadata.js";
+import { enrichItem, remotePoster } from "./metadata.js?v=5";
 import { fileWantsDemux, languageFromName, loadMovi, moviWasmUrl, vttFile } from "./playback.js";
 import { collectFromFileList, collectFromHandle } from "./scan.js";
 
@@ -144,6 +144,9 @@ function stillTag(episode, series, className = "") {
   }
   if (episode?.stillUrl) sources.push(secureUrl(episode.stillUrl));
   const name = shownName(series) || episodeName(episode);
+  for (const src of imageSources(series, true)) {
+    if (src && !src.startsWith("data:")) sources.push(src);
+  }
   sources.push(artwork(name, series?.year, true));
   const unique = [...new Set(sources.filter(Boolean))];
   const [src, ...alts] = unique;
@@ -1649,6 +1652,7 @@ async function restore() {
     state.preview = true;
     state.connected = true;
     render();
+    state.items.forEach((item, index) => enrichItem(item, onMeta, index < 6 ? 0 : 1));
     return;
   }
   render();

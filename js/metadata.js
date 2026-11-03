@@ -16,7 +16,7 @@ function enqueue(task, priority = 1) {
 }
 
 function pump() {
-  while (active < 2 && jobs.length) {
+  while (active < 4 && jobs.length) {
     const job = jobs.shift();
     active += 1;
     job.task()
@@ -214,22 +214,45 @@ function artworkUrl(url) {
   return String(url || "").replace(/^http:\/\//i, "https://").replace(/\d+x\d+bb/, "600x600bb");
 }
 
-async function fromItunes(item) {
-  const entity = item.type === "series" ? "tvSeason" : "movie";
-  const data = await fetchJson(`https://itunes.apple.com/search?term=${encodeURIComponent(item.title)}&entity=${entity}&limit=8`);
-  let best = null;
+async function itunesArt(title, entity, country) {
+  const data = await fetchJson(`https://itunes.apple.com/search?term=${encodeURIComponent(title)}&entity=${entity}&country=${country}&limit=6`);
+  let best = "";
   let bestScore = 0;
   for (const hit of data?.results || []) {
+    if (!hit.artworkUrl100) continue;
     const name = String(hit.collectionName || hit.trackName || "").replace(/,?\s*season\s+\d+$/i, "").trim();
-    const year = Number(String(hit.releaseDate || "").slice(0, 4)) || null;
-    const score = titleScore(name, item.title);
-    const yearOk = item.type === "series" || !yearsClash(item.year, year);
-    if (!yearOk || score < 0.8 || score <= bestScore || !hit.artworkUrl100) continue;
-    best = hit;
+    const score = titleScore(name, title);
+    if (score < 0.45 || score <= bestScore) continue;
+    best = artworkUrl(hit.artworkUrl100);
     bestScore = score;
   }
-  if (!best?.artworkUrl100) return null;
-  const poster = artworkUrl(best.artworkUrl100);
+  return best;
+}
+
+async function wikiImage(title, type) {
+  const hint = type === "series" ? "television" : "film";
+  const data = await fetchJson(`https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrsearch=${encodeURIComponent(`${title} ${hint}`)}&gsrlimit=4&prop=pageimages&piprop=thumbnail&pithumbsize=800`);
+  const pages = Object.values(data?.query?.pages || {});
+  const page = pages.find((entry) => entry.thumbnail?.source && titleScore(entry.title, title) >= 0.45);
+  return artworkUrl(page?.thumbnail?.source || "");
+}
+
+async function loosePoster(item) {
+  const title = String(item?.title || "").trim();
+  if (!title) return "";
+  const entity = item.type === "series" ? "tvSeason" : "movie";
+  const other = item.type === "series" ? "movie" : "tvSeason";
+  const found = await Promise.all([
+    itunesArt(title, entity, "in"),
+    itunesArt(title, entity, "us"),
+    itunesArt(title, other, "us"),
+  ]);
+  return found.find(Boolean) || wikiImage(title, item.type);
+}
+
+async function fromItunes(item) {
+  const poster = await loosePoster(item);
+  if (!poster) return null;
   return {
     source: "artwork",
     title: item.title,
@@ -246,14 +269,11 @@ async function fromItunes(item) {
 }
 
 export async function remotePoster(title, year, type) {
-  const name = String(title || "").trim();
-  if (!name) return "";
-  const art = await fromItunes({
-    title: name,
+  return loosePoster({
+    title: String(title || "").trim(),
     year: Number(year) || null,
     type: type === "series" ? "series" : "movie",
   });
-  return art?.posterUrl || "";
 }
 
 function omdbUrl(params) {
@@ -439,8 +459,22 @@ function needsEnrichment(item) {
   return (item.seasons || []).some((season) => season.episodes.some((episode) => !episode.description || /^(episode\s+\d+|extra)$/i.test(episode.title || "")));
 }
 
+function paintPoster(item, onUpdate) {
+  if (item.posterPath || item.posterUrl) return Promise.resolve(false);
+  return enqueue(async () => {
+    if (item.posterPath || item.posterUrl) return false;
+    const url = await loosePoster(item);
+    if (!url || item.posterPath || item.posterUrl) return false;
+    item.posterUrl = url;
+    if (!item.backdropUrl) item.backdropUrl = url;
+    if (onUpdate) onUpdate(item);
+    return true;
+  }, 0);
+}
+
 export function enrichItem(item, onUpdate, priority = 1) {
-  if (!needsEnrichment(item)) return Promise.resolve(false);
+  const poster = paintPoster(item, onUpdate);
+  if (!needsEnrichment(item)) return poster;
   return enqueue(async () => {
     const key = cacheKey(item);
     const cached = await idbGet("meta", key);
