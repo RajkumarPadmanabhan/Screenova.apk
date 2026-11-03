@@ -189,12 +189,6 @@ h1, h2, h3 { font-family: Outfit, Inter, sans-serif; letter-spacing: -0.04em; ma
 .library { display: grid; gap: 16px; padding: 20px 16px 32px; max-width: 1100px; }
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
 .stat b { overflow-wrap: anywhere; }
-.mail-form { display: grid; gap: 12px; max-width: 560px; }
-.mail-form label { display: grid; gap: 6px; color: var(--muted); font-size: 0.85rem; }
-.mail-form input, .mail-form textarea {
-  border: 0; border-radius: 12px; padding: 12px 14px; background: #141418; color: white; font: inherit;
-}
-.mail-form textarea { min-height: 140px; resize: vertical; }
 .dash-filter input {
   width: min(420px, 100%); border: 0; border-radius: 999px; padding: 12px 14px;
   background: #141418; color: white;
@@ -215,8 +209,7 @@ h1, h2, h3 { font-family: Outfit, Inter, sans-serif; letter-spacing: -0.04em; ma
 .stat span { color: var(--faint); font-size: 0.8rem; }
 .note { color: var(--muted); line-height: 1.55; }
 .note.warn { color: #ffb4b4; }
-.note.warn[hidden], .note.sent[hidden] { display: none; }
-.note.sent { background: #123024; color: #b6f3cd; border-radius: 12px; padding: 12px 14px; }
+.note.warn[hidden] { display: none; }
 
 .player {
   position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column;

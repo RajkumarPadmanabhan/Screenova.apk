@@ -10,7 +10,6 @@ import {
   normalizeKey,
   shortText,
 } from "./library.js";
-import { credentialsReady, hrFromJob, jobKeywords, mailErrors } from "./mail.js";
 import { enrichItem } from "./metadata.js";
 import { fileWantsDemux, languageFromName, loadMovi, moviWasmUrl, vttFile } from "./playback.js";
 import { collectFromFileList, collectFromHandle } from "./scan.js";
@@ -35,8 +34,6 @@ const state = {
   keepScroll: false,
   skin: "",
   dashQuery: "",
-  mail: { from: "", to: "", appPassword: "", job: "", resume: "" },
-  mailEdit: false,
 };
 
 const view = () => document.getElementById("view");
@@ -107,7 +104,6 @@ function readRoute() {
   if (parts[0] === "list") return { name: "list" };
   if (parts[0] === "search") return { name: "search" };
   if (parts[0] === "library") return { name: "library" };
-  if (parts[0] === "mail") return { name: "mail" };
   if (parts[0] === "title") return { name: "title", id: parts.slice(1).join("/") };
   return { name: "home" };
 }
@@ -118,7 +114,6 @@ function currentNav() {
   if (state.route.name === "list") return "list";
   if (state.route.name === "search") return "search";
   if (state.route.name === "library") return "library";
-  if (state.route.name === "mail") return "mail";
   return "home";
 }
 
@@ -175,27 +170,12 @@ function onMeta(updated, info) {
   scheduleSave();
 }
 
-function toast(message, duration = 2800) {
+function toast(message) {
   const node = document.getElementById("toast");
   node.textContent = message;
   node.classList.add("show");
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => node.classList.remove("show"), duration);
-}
-
-function showMailSent(mail) {
-  state.mailNotice = { ok: true, to: mail.to.trim(), from: mail.from.trim(), at: Date.now() };
-  const banner = document.querySelector("[data-mail-notice]");
-  const message = `Resume PDF sent to ${state.mailNotice.to} from ${state.mailNotice.from}.`;
-  if (banner) {
-    banner.hidden = false;
-    banner.textContent = message;
-  }
-  toast(message, 6000);
-  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-  try {
-    new Notification("Mail sent", { body: message });
-  } catch { /* the banner on the page still shows */ }
+  toast.timer = setTimeout(() => node.classList.remove("show"), 2800);
 }
 
 function syncLabel() {
@@ -219,7 +199,6 @@ function copy() {
       list: "Watchlist",
       search: "Find",
       library: "Dashboard",
-      mail: "Mail",
       play: "Watch now",
       listAdd: "Watchlist",
       listOn: "In Watchlist",
@@ -235,8 +214,7 @@ function copy() {
     list: "My List",
     search: "Search",
       library: "Dashboard",
-      mail: "Mail",
-      play: "Play",
+    play: "Play",
     listAdd: "My List",
     listOn: "In My List",
     recent: "Recently Added",
@@ -379,7 +357,6 @@ function setupView() {
     <p class="lede">Choose the folder where your movies and series are saved. They show up in this ${esc(look)} layout with the name, category, size, and artwork from each file.</p>
     <div class="actions">
       <button class="solid" type="button" data-act="choose">Add folder</button>
-      <button class="ghost" type="button" data-act="mail-page">Mail HR</button>
       <button class="ghost" type="button" data-act="reset-skin">Change interface</button>
     </div>
     <ul class="points">
@@ -574,7 +551,6 @@ function libraryView() {
     </div>
     <div class="actions">
       <button class="solid" type="button" data-act="refresh">Refresh folder</button>
-      <button class="ghost" type="button" data-act="mail-page">Mail HR</button>
       <button class="ghost" type="button" data-act="choose">Change folder</button>
       <button class="ghost" type="button" data-act="forget">Remove library</button>
     </div>
@@ -605,100 +581,6 @@ function libraryView() {
   </section>`;
 }
 
-function mailMatchText() {
-  const to = hrFromJob(state.mail.job, state.mail.from);
-  const words = jobKeywords(state.mail.job);
-  if (!String(state.mail.job || "").trim()) return "Paste a job description. The HR address in it is who receives the resume.";
-  if (!to) return "No HR email in that job description yet.";
-  return `HR: ${to}. Keywords added to the resume: ${words.length ? words.join(", ") : "none found"}.`;
-}
-
-function mailView() {
-  const mail = state.mail;
-  const saved = credentialsReady(mail) && !state.mailEdit;
-  const sent = state.mailNotice?.ok ? `Resume PDF sent to ${esc(state.mailNotice.to)} from ${esc(state.mailNotice.from)}.` : "";
-  return `<section class="library mail-page">
-    <p class="eyebrow">Mail</p>
-    <h1>Send resume to HR</h1>
-    <p class="note">Save your email and app password once, with your latest resume. After that, paste a job description. Screenova adds the role's keywords to the resume, makes a PDF, and sends it to the HR address in that description.</p>
-    <p class="note sent" data-mail-notice ${sent ? "" : "hidden"}>${sent}</p>
-    <form class="mail-form" id="hr-mail">
-      ${saved ? `<p class="note">Using ${esc(mail.from)}. The resume is saved.</p>
-        <div class="actions"><button class="ghost" type="button" data-act="edit-mail">Change email or resume</button></div>` : `<label>Your email (From)
-        <input data-mail="from" type="email" autocomplete="email" value="${esc(mail.from)}" placeholder="you@gmail.com" required>
-      </label>
-      <label>App password
-        <input data-mail="appPassword" type="password" autocomplete="off" value="${esc(mail.appPassword)}" placeholder="16-character app password" required>
-      </label>
-      <label>Latest resume
-        <textarea data-mail="resume" placeholder="Paste your resume. A new upload replaces it." required>${esc(mail.resume)}</textarea>
-      </label>
-      <div class="actions">
-        <button class="ghost" type="button" data-act="resume-file">Upload resume text</button>
-        <button class="ghost" type="button" data-act="save-mail">Save once</button>
-      </div>`}
-      <label>Job description
-        <textarea data-mail="job" placeholder="Paste the job description, including the HR email." required>${esc(mail.job)}</textarea>
-      </label>
-      <p class="note" data-job-match>${esc(mailMatchText())}</p>
-      <div class="actions">
-        <button class="solid" type="submit">Send PDF resume</button>
-      </div>
-    </form>
-    <p class="note">Use an app password from Gmail, Outlook, Yahoo, or iCloud, not your normal login password. It stays in this browser. On this computer, run <code>node server/mail.mjs</code> and leave that window open before you send.</p>
-  </section>`;
-}
-
-async function saveMailOnce() {
-  const mail = state.mail;
-  if (!credentialsReady(mail)) {
-    toast("Add your email, app password, and resume.");
-    return;
-  }
-  await idbSet("kv", "mail", { ...mail, to: "" });
-  state.mailEdit = false;
-  toast("Saved. Next time, paste a job description.");
-  render();
-}
-
-async function sendHrMail(event) {
-  event.preventDefault();
-  const mail = state.mail;
-  const errors = mailErrors(mail);
-  mail.to = hrFromJob(mail.job, mail.from);
-  if (errors.length) {
-    toast(errors.includes("to")
-      ? "The job description needs an HR email address."
-      : "Save your email, app password, and resume once, then paste a job description.");
-    state.mailEdit = !credentialsReady(mail);
-    return;
-  }
-  await idbSet("kv", "mail", { ...mail });
-  state.mailEdit = false;
-  if (typeof Notification !== "undefined" && Notification.permission === "default") Notification.requestPermission().catch(() => {});
-  const button = event.target.querySelector("button[type='submit']");
-  if (button) button.disabled = true;
-  try {
-    const response = await fetch("http://127.0.0.1:8787/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(mail),
-    });
-    const data = await response.json().catch(() => null);
-    if (response.ok && data?.ok) {
-      showMailSent(mail);
-      render();
-      return;
-    }
-    const reason = String(data?.error || "Mail could not be sent.").replaceAll(mail.appPassword, "");
-    toast(reason);
-  } catch {
-    toast("Start the mail sender first: node server/mail.mjs");
-  } finally {
-    if (button) button.disabled = false;
-  }
-}
-
 function paintBackdrop(node, item) {
   if (!node || !item) return;
   const image = backdropFor(item).replace(/"/g, "");
@@ -714,8 +596,7 @@ function render() {
   const route = state.route;
   let html = progressView();
   if (!(state.scanning && !state.items.length)) {
-    if (route.name === "mail") html = mailView();
-    else if (!state.items.length) html = setupView();
+    if (!state.items.length) html = setupView();
     else if (route.name === "movies") html = gridView("movie", route.genre);
     else if (route.name === "series") html = gridView("series", route.genre);
     else if (route.name === "browse") html = gridView("all", route.genre);
@@ -1522,20 +1403,6 @@ async function onClick(event) {
   if (act === "skin") return chooseSkin(button.dataset.skin);
   if (act === "reset-skin") return chooseSkin("");
   if (act === "choose") return chooseFolder();
-  if (act === "mail-page") {
-    location.hash = "#/mail";
-    return;
-  }
-  if (act === "edit-mail") {
-    state.mailEdit = true;
-    render();
-    return;
-  }
-  if (act === "resume-file") {
-    document.getElementById("resume-file").click();
-    return;
-  }
-  if (act === "save-mail") return saveMailOnce();
   if (act === "allow") return allowFolder();
   if (act === "refresh") return refreshLibrary();
   if (act === "forget") return forgetFolder();
@@ -1609,22 +1476,12 @@ function onPlayerInput(event) {
 }
 
 async function restore() {
-  const [catalog, list, progress, settings, savedMail] = await Promise.all([
+  const [catalog, list, progress, settings] = await Promise.all([
     idbGet("kv", "catalog"),
     idbGet("kv", "list"),
     idbAll("progress"),
     idbGet("kv", "settings"),
-    idbGet("kv", "mail"),
   ]);
-  if (savedMail) {
-    state.mail = {
-      from: savedMail.from || "",
-      to: "",
-      appPassword: savedMail.appPassword || "",
-      job: savedMail.job || "",
-      resume: savedMail.resume || "",
-    };
-  }
   if (!skinLocked && (settings?.skin === "netflix" || settings?.skin === "prime")) state.skin = settings.skin;
   if (catalog?.items?.length) {
     state.items = catalog.items;
@@ -1672,19 +1529,7 @@ async function restore() {
 
 function bind() {
   document.body.addEventListener("click", onClick);
-  document.body.addEventListener("submit", (event) => {
-    if (event.target.id !== "hr-mail") return;
-    sendHrMail(event);
-  });
   document.body.addEventListener("input", (event) => {
-    if (event.target.dataset.mail && state.mail) {
-      state.mail[event.target.dataset.mail] = event.target.value;
-      if (event.target.dataset.mail === "job") {
-        const match = document.querySelector("[data-job-match]");
-        if (match) match.textContent = mailMatchText();
-      }
-      return;
-    }
     if (event.target.id === "dash-filter") {
       state.dashQuery = event.target.value;
       const titles = document.querySelector("[data-dash-titles]");
@@ -1716,24 +1561,6 @@ function bind() {
     });
     const folderName = files[0].webkitRelativePath?.split("/")[0] || "Library";
     await adopt(entries, folderName, false);
-  });
-  document.getElementById("resume-file").addEventListener("change", async (event) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
-    const text = await file.text();
-    if (!text.trim()) {
-      toast("That file has no resume text.");
-      return;
-    }
-    state.mail.resume = text;
-    const box = document.querySelector("[data-mail='resume']");
-    if (box) box.value = text;
-    else {
-      state.mailEdit = true;
-      render();
-    }
-    toast("Resume loaded. Save it once.");
   });
   document.getElementById("sub-file").addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
