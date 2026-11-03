@@ -293,7 +293,13 @@ h1, h2, h3 { font-family: inherit; letter-spacing: -0.03em; margin: 0; font-weig
   background: black; color: white;
 }
 .player[hidden] { display: none; }
-.player-episodes { padding: 4px 14px 8px; background: #141414; }
+.poster img, .episode img, .player-ep img, .detail-poster, .dash-title img, .result img {
+  object-fit: cover;
+  object-position: center center;
+}
+.player-episodes { flex: 0 0 auto; padding: 8px 14px 10px; background: #141414; }
+.player.has-episodes .stage { flex: 1 1 auto; min-height: 120px; max-height: 58vh; }
+.stage video, .stage movi-player, .player video { object-fit: contain; }
 .player-episodes h3 { margin: 0 0 8px; font-size: 1rem; }
 .player-ep-row { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; }
 .player-ep { flex: 0 0 200px; border: 0; background: transparent; color: white; text-align: left; cursor: pointer; padding: 0; }

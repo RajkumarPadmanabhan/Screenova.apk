@@ -527,7 +527,7 @@ export function buildLibrary(entries) {
         type: "series",
         category: "Series",
         title: named.title,
-        sourceName: showSystemName(record),
+        sourceName: tidyTitle(showSystemName(record)) || named.title,
         year: named.year,
         genres: [],
         rating: null,
@@ -546,7 +546,7 @@ export function buildLibrary(entries) {
     const series = seriesMap.get(key);
     const candidate = trustedShowDir(record, named.title);
     if (candidate && (!series.showDir || candidate.length > series.showDir.length)) series.showDir = candidate;
-    if (record.titleFolder?.raw) series.sourceName = systemName(record.titleFolder.raw);
+    if (record.titleFolder?.raw) series.sourceName = tidyTitle(systemName(record.titleFolder.raw)) || series.sourceName;
     if (!series.year && named.year) series.year = named.year;
     series.genres = [...new Set([...series.genres, ...record.genres])];
     series.size += record.size;
@@ -596,7 +596,7 @@ export function buildLibrary(entries) {
             season: number,
             episode: episodeNo,
             title: primary.episodeTitle || generic,
-            sourceName: systemName(versions[0].fileName),
+            sourceName: primary.episodeTitle || generic,
             size: versions.reduce((sum, version) => sum + version.size, 0),
             duration: null,
             addedAt: Math.max(...group.map((item) => item.lastModified || 0)),
@@ -688,7 +688,7 @@ export function buildLibrary(entries) {
           filePath: record.filePath,
           fileName: record.fileName,
           title: stripReleaseTags(record.fileName.replace(/\.[^.]+$/, "")) || "Extra",
-          sourceName: systemName(record.fileName),
+          sourceName: tidyTitle(systemName(record.fileName)) || "Extra",
           size: record.size,
           lastModified: record.lastModified || 0,
           ext: record.ext,
@@ -708,7 +708,7 @@ export function buildLibrary(entries) {
         type: "movie",
         category: "Movie",
         title: assignment.group.title,
-        sourceName: systemName((versions.slice().sort((a, b) => (a.part || 99) - (b.part || 99))[0] || versions[0]).fileName),
+        sourceName: tidyTitle(systemName((versions.slice().sort((a, b) => (a.part || 99) - (b.part || 99))[0] || versions[0]).fileName)) || assignment.group.title,
         year: assignment.group.year,
         genres: [...new Set(assignment.group.records.flatMap((record) => record.genres))],
         rating: null,
@@ -742,14 +742,15 @@ export function polishLibrary(items) {
   for (const item of items || []) {
     const title = tidyTitle(item.title);
     if (title) item.title = title;
-    if (!item.sourceName) {
-      if (item.type === "movie") {
-        const file = item.versions?.[0]?.fileName;
-        item.sourceName = file ? systemName(file) : item.title;
-      } else {
-        const folder = String(item.showDir || "").split(/[/\\]/).filter(Boolean).pop();
-        item.sourceName = folder && !/^season\s*\d+$/i.test(folder) ? systemName(folder) : item.title;
-      }
+    if (item.sourceName) {
+      const cleaned = tidyTitle(item.sourceName);
+      if (cleaned) item.sourceName = cleaned;
+    } else if (item.type === "movie") {
+      const file = item.versions?.[0]?.fileName;
+      item.sourceName = (file && tidyTitle(systemName(file))) || item.title;
+    } else {
+      const folder = String(item.showDir || "").split(/[/\\]/).filter(Boolean).pop();
+      item.sourceName = (folder && !/^season\s*\d+$/i.test(folder) && tidyTitle(systemName(folder))) || item.title;
     }
     for (const extra of item.extras || []) {
       const extraTitle = tidyTitle(extra.title);
@@ -757,7 +758,12 @@ export function polishLibrary(items) {
     }
     for (const season of item.seasons || []) {
       for (const episode of season.episodes || []) {
-        if (!episode.sourceName && episode.versions?.[0]?.fileName) episode.sourceName = systemName(episode.versions[0].fileName);
+        if (episode.sourceName) {
+          const cleanedEpisode = tidyTitle(episode.sourceName);
+          if (cleanedEpisode) episode.sourceName = cleanedEpisode;
+        } else if (episode.versions?.[0]?.fileName) {
+          episode.sourceName = tidyTitle(systemName(episode.versions[0].fileName)) || episode.title;
+        }
         if (/^(episode\s+\d+|extra|specials?)$/i.test(episode.title || "")) continue;
         const episodeTitle = tidyTitle(episode.title);
         if (episodeTitle) episode.title = episodeTitle;

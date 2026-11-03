@@ -62,20 +62,24 @@ export function artwork(title, year, wide = false) {
   ctx.lineTo(wide ? 168 : 110, height - (wide ? 168 : 210));
   ctx.stroke();
   ctx.globalAlpha = 1;
+  const label = String(title || "Untitled").trim();
   ctx.fillStyle = "#ffffff";
-  ctx.font = `700 ${wide ? 64 : 48}px Inter, sans-serif`;
-  ctx.textBaseline = "top";
-  const lines = wrap(ctx, title, width - (wide ? 140 : 80));
-  const lineHeight = wide ? 74 : 56;
-  let y = height - (wide ? 150 : 170) - (lines.length - 1) * lineHeight;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = `800 ${wide ? 72 : 54}px Inter, sans-serif`;
+  const lines = wrap(ctx, label, width - (wide ? 160 : 88));
+  const lineHeight = wide ? 84 : 64;
+  let y = height / 2 - ((lines.length - 1) * lineHeight) / 2;
   for (const line of lines) {
-    ctx.fillText(line, wide ? 72 : 40, y);
+    ctx.fillText(line, width / 2, y);
     y += lineHeight;
   }
   if (year) {
     ctx.fillStyle = light;
     ctx.font = "600 22px Inter, sans-serif";
-    ctx.fillText(String(year), wide ? 72 : 40, 48);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(String(year), wide ? 72 : 40, 40);
   }
   const url = canvas.toDataURL("image/jpeg", 0.86);
   cache.set(key, url);

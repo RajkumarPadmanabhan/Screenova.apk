@@ -1,4 +1,4 @@
-import { artwork } from "./art.js?v=3";
+import { artwork } from "./art.js?v=4";
 import { idbAll, idbClear, idbDel, idbGet, idbSet } from "./db.js";
 import {
   buildLibrary,
@@ -10,7 +10,8 @@ import {
   normalizeKey,
   polishLibrary,
   shortText,
-} from "./library.js?v=11";
+  tidyTitle,
+} from "./library.js?v=12";
 import { enrichItem, remotePoster } from "./metadata.js";
 import { fileWantsDemux, languageFromName, loadMovi, moviWasmUrl, vttFile } from "./playback.js";
 import { collectFromFileList, collectFromHandle } from "./scan.js";
@@ -40,11 +41,15 @@ const state = {
 const BRAND = "Netflix oh";
 
 function shownName(item) {
-  return item?.sourceName || item?.title || "";
+  const fromFile = tidyTitle(item?.sourceName || "");
+  const title = tidyTitle(item?.title || "");
+  return fromFile || title || item?.title || "Untitled";
 }
 
 function episodeName(episode) {
-  return episode?.sourceName || episode?.title || "";
+  const title = tidyTitle(episode?.title || "");
+  if (title) return title;
+  return tidyTitle(episode?.sourceName || "") || "Episode";
 }
 const playIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12-7.5L7 4.5z"></path></svg>`;
 const infoIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6"></path><path d="M12 7.5h.01"></path></svg>`;
@@ -84,7 +89,7 @@ function imageSources(item, wide = false) {
     const url = secureUrl(extra);
     if (url) list.push(url);
   }
-  list.push(artwork(item?.title || "Title", item?.year, wide));
+  list.push(artwork(shownName(item), item?.year, wide));
   return [...new Set(list.filter(Boolean))];
 }
 
@@ -92,7 +97,9 @@ function imageTag(item, { wide = false, alt = "", show = "", className = "" } = 
   const sources = imageSources(item, wide);
   const [src, ...alts] = sources;
   const kind = item?.type === "series" ? "series" : "movie";
-  return `<img${className ? ` class="${className}"` : ""} src="${esc(src || "")}" data-alts="${esc(alts.join("|"))}" alt="${esc(alt || item?.title || "")}" data-year="${esc(item?.year || "")}" data-wide="${wide ? "1" : "0"}" data-kind="${kind}" data-show="${esc(show || item?.title || "")}">`;
+  const name = shownName(item);
+  const picture = src || artwork(name, item?.year, wide);
+  return `<img${className ? ` class="${className}"` : ""} src="${esc(picture)}" data-alts="${esc(alts.join("|"))}" alt="${esc(alt || name)}" data-year="${esc(item?.year || "")}" data-wide="${wide ? "1" : "0"}" data-kind="${kind}" data-show="${esc(show || name)}">`;
 }
 
 function applyImage(image, item, wide) {
@@ -102,7 +109,7 @@ function applyImage(image, item, wide) {
   image.dataset.alts = alts.join("|");
   image.dataset.fallback = "";
   image.dataset.tried = "";
-  image.dataset.show = item?.title || image.dataset.show || "";
+  image.dataset.show = shownName(item) || image.dataset.show || "";
   if (image.getAttribute("src") !== src) image.src = src;
 }
 
@@ -136,10 +143,11 @@ function stillTag(episode, series, className = "") {
     if (local) sources.push(local);
   }
   if (episode?.stillUrl) sources.push(secureUrl(episode.stillUrl));
-  sources.push(...imageSources(series, true));
+  const name = shownName(series) || episodeName(episode);
+  sources.push(artwork(name, series?.year, true));
   const unique = [...new Set(sources.filter(Boolean))];
   const [src, ...alts] = unique;
-  return `<img${className ? ` class="${className}"` : ""} src="${esc(src || "")}" data-alts="${esc(alts.join("|"))}" alt="${esc(episode?.title || series?.title || "")}" data-year="${esc(series?.year || "")}" data-wide="1" data-kind="series" data-show="${esc(series?.title || "")}">`;
+  return `<img${className ? ` class="${className}"` : ""} src="${esc(src || artwork(name, series?.year, true))}" data-alts="${esc(alts.join("|"))}" alt="${esc(name)}" data-year="${esc(series?.year || "")}" data-wide="1" data-kind="series" data-show="${esc(name)}">`;
 }
 
 function blurb(item) {
