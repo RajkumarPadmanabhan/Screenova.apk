@@ -168,20 +168,54 @@ function stripYear(value, year) {
   return String(value || "").replace(pattern, " ");
 }
 
+function takePart(value) {
+  const source = String(value || "");
+  const match = source.match(/(?:^|[.\s_-])(?:(?:part|pt)[.\s_-]*(\d{1,2})|(?:cd|disc|disk)[.\s_-]*(\d{1,2})|(\d{1,2})\s*of\s*\d{1,2})(?=[.\s_-]|$)/i);
+  if (!match) return { text: source, part: null };
+  const part = Number(match[1] || match[2] || match[3]);
+  return {
+    text: `${source.slice(0, match.index)} ${source.slice(match.index + match[0].length)}`,
+    part: Number.isFinite(part) && part > 0 ? part : null,
+  };
+}
+
+const JUNK_TOKEN = /^(?:im|cc|mj|hq|hd|yts|yify|pahe|rarbg|ettv|evo|tigole|qxr|psa|fgt|etrg|sparks|ion10|ntb|tgx|galaxyrg|x264|x265|h264|h265|hevc|avc|xvid|divx|bluray|bdrip|brrip|webrip|webdl|hdrip|dvdrip|hdtv|hdcam|hdts|hqrip|hdr10|10bit|8bit|hi10p|2160p|1080p|720p|480p|576p|uhd|sdr|hdr|aac|ddp|dts|truehd|atmos|ac3|eac3|flac|amzn|dsnp|hmax|atvp|esub|msub|remux|repack|nf)$/i;
+
+function dropJunkTokens(value) {
+  const tokens = String(value || "").split(/\s+/).filter(Boolean);
+  const kept = tokens.filter((token) => !JUNK_TOKEN.test(token.replace(/[^a-z0-9]/gi, "")));
+  return (kept.length ? kept : tokens).join(" ");
+}
+
 function stripReleaseTags(value) {
-  return String(value || "")
-    .replace(/[._]+/g, " ")
-    .replace(/\[.*?\]/g, " ")
+  const cleaned = String(value || "")
+    .replace(/(?:https?:\/\/)?(?:www\.)?(?:yts|yify|pahe|rarbg|1tamilmv|tamilmv|tamilrockers)\.[a-z]{2,}/gi, " ")
+    .replace(/[@＠][a-z0-9][a-z0-9._-]*/gi, " ")
+    .replace(/[\[{].*?[\]}]/g, " ")
     .replace(/\(.*?\)/g, " ")
-    .replace(/\b(2160p|1080p|720p|480p|576p|4k|uhd|hdr10|hdr|sdr)\b/gi, " ")
-    .replace(/\b(bluray|blu ray|bdrip|brrip|webrip|web dl|webdl|hdrip|dvdrip|hdtv|remux|proper|repack|extended|unrated|directors cut|imax|amzn|nf|dsnp|hmax|atvp)\b/gi, " ")
+    .replace(/[._]+/g, " ")
+    .replace(/\b(?:www\s+)?(?:yts|yify|pahe|rarbg|ettv|evo|tigole|qxr|psa|fgt|etrg|sparks|ion10|ntb|tgx|galaxyrg)(?:\s+(?:mx|am|ag|lt|to|in|bz|ws|li|cc))?\b/gi, " ")
+    .replace(/\b(2160p|1080p|720p|480p|576p|4k|uhd|hdr10|hdr|sdr|hq|hdcam|hdts|hqrip)\b/gi, " ")
+    .replace(/\b(bluray|blu ray|bdrip|brrip|webrip|web dl|webdl|hdrip|dvdrip|hdtv|remux|proper|repack|extended|unrated|uncut|directors cut|imax|amzn|dsnp|hmax|atvp|esub|msub)\b/gi, " ")
     .replace(/\b(x264|x265|h264|h265|hevc|avc|xvid|divx)\b/gi, " ")
     .replace(/\b(ddp|dd|dts|truehd|atmos|aac|flac|eac3|ac3|mp3)\s?\d?(?:\.\d)?\b/gi, " ")
     .replace(/\b(10bit|8bit|hi10p)\b/gi, " ")
     .replace(/\b(complete|multi|dual audio|subbed|dubbed)\b/gi, " ")
+    .replace(/\bof\s+\d{1,2}\b/gi, " ")
     .replace(/[-–—]\s*[A-Za-z0-9]{2,}$/g, " ")
+    .replace(/(^|\s)[-–—]+|[-–—]+(?=\s|$)/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  return dropJunkTokens(cleaned);
+}
+
+export function tidyTitle(value) {
+  const year = extractYear(value);
+  let text = String(value || "");
+  const withoutYear = stripYear(text, year).trim();
+  if (withoutYear) text = withoutYear;
+  text = stripReleaseTags(takePart(text).text);
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function isWeakTitle(title) {
@@ -191,7 +225,8 @@ function isWeakTitle(title) {
 export function parseRelease(filename) {
   const base = String(filename || "").replace(/\.[^.]+$/, "");
   const year = extractYear(base);
-  const working = stripYear(base, year);
+  const parted = takePart(stripYear(base, year));
+  const working = parted.text;
   let season = null;
   let episode = null;
   let showPart = working;
@@ -216,7 +251,7 @@ export function parseRelease(filename) {
   if (qualityMatch) {
     quality = /4k|uhd|2160p/i.test(qualityMatch[1]) ? "4K" : qualityMatch[1].toLowerCase();
   }
-  return { title, year, season, episode, episodeTitle, quality };
+  return { title, year, season, episode, episodeTitle, quality, part: season != null ? null : parted.part };
 }
 
 function classifyFolder(name) {
@@ -295,6 +330,7 @@ function videoRecord(entry) {
     episode,
     episodeTitle,
     quality: parsed.quality,
+    part: parsed.part || null,
     genres: info.folders.filter((folder) => folder.role === "genre").map((folder) => folder.genre),
     titleFolder,
     showDir,
@@ -339,6 +375,7 @@ function versionOf(record) {
     lastModified: record.lastModified,
     quality: record.quality || record.ext.toUpperCase(),
     ext: record.ext,
+    part: record.part || null,
   };
 }
 
@@ -352,7 +389,12 @@ function qualityRank(quality) {
 }
 
 function sortVersions(versions) {
-  return [...versions].sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality) || b.size - a.size);
+  return [...versions].sort((a, b) => {
+    const ap = a.part || 0;
+    const bp = b.part || 0;
+    if (ap && bp && ap !== bp) return ap - bp;
+    return qualityRank(b.quality) - qualityRank(a.quality) || (b.size || 0) - (a.size || 0);
+  });
 }
 
 function slugId(type, title, year) {
@@ -419,7 +461,7 @@ export function buildLibrary(entries) {
   for (const group of dirs.values()) {
     if (!group[0].titleFolder || group.some((record) => record.inExtras)) continue;
     if (group.some((record) => record.isEpisode && /s\d{1,2}[.\s_-]*e\d/i.test(record.fileName))) continue;
-    const numbered = group.filter((record) => !record.inExtras && looseEpisodeName(record));
+    const numbered = group.filter((record) => !record.inExtras && !record.part && looseEpisodeName(record));
     if (numbered.length >= 2 && numbered.length === group.length) {
       numbered.forEach((record, index) => {
         record.isEpisode = true;
@@ -642,7 +684,29 @@ export function buildLibrary(entries) {
   }
 
   items.sort((a, b) => a.title.localeCompare(b.title));
-  return items;
+  return polishLibrary(items);
+}
+
+export function polishLibrary(items) {
+  for (const item of items || []) {
+    const title = tidyTitle(item.title);
+    if (title) item.title = title;
+    for (const extra of item.extras || []) {
+      const extraTitle = tidyTitle(extra.title);
+      if (extraTitle) extra.title = extraTitle;
+    }
+    for (const season of item.seasons || []) {
+      for (const episode of season.episodes || []) {
+        if (/^(episode\s+\d+|extra|specials?)$/i.test(episode.title || "")) continue;
+        const episodeTitle = tidyTitle(episode.title);
+        if (episodeTitle) episode.title = episodeTitle;
+        if (item.title && normalizeKey(episode.title) === normalizeKey(item.title) && episode.episode) {
+          episode.title = `Episode ${episode.episode}`;
+        }
+      }
+    }
+  }
+  return items || [];
 }
 
 export function librarySignature(items) {

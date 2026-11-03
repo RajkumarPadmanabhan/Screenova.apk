@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildLibrary, parseRelease } from "../js/library.js";
+import { buildLibrary, parseRelease, polishLibrary } from "../js/library.js";
 
 const GB = 1024 ** 3;
 
@@ -84,4 +84,40 @@ test("groups seasons under one series and keeps movies, genres, size, and sideca
   assert.equal(paper.type, "series");
   assert.equal(paper.seasons[0].name, "Season 1");
   assert.equal(paper.seasons[0].episodes.length, 2);
+});
+
+test("drops release tags and keeps movie parts in order", () => {
+  assert.equal(parseRelease("The.Batman.2022.1080p.HQ.WEBRip.x264-YTS.mkv").title, "The Batman");
+  assert.equal(parseRelease("Inception.2010.1080p.BluRay.@mj.mkv").title, "Inception");
+  assert.equal(parseRelease("Oppenheimer.2023.720p.PaHe.@cc.mkv").title, "Oppenheimer");
+  assert.equal(parseRelease("Dune.Part.Two.2024.1080p.mkv").title, "Dune Part Two");
+  assert.equal(parseRelease("Show.Name.S01E02.1080p.YTS.mkv").title, "Show Name");
+  assert.equal(parseRelease("Show.Name.S01E02.1080p.YTS.mkv").episodeTitle, "");
+  assert.equal(parseRelease("Jawan.2023.HQ.YTS.PaHe.@cc.@mj.@Im.mkv").title, "Jawan");
+  assert.equal(parseRelease("KGF.Chapter.2.2022.1080p.WEBRip.Im.mkv").title, "KGF Chapter 2");
+  assert.equal(parseRelease("[YTS.MX] The.Batman.2022.1080p.HQ.mkv").title, "The Batman");
+  assert.equal(parseRelease("Heat.1995.1of2.mkv").part, 1);
+  assert.equal(parseRelease("Heat.1995.2of2.mkv").part, 2);
+  assert.equal(parseRelease("Heat.1995.2of2.mkv").title, "Heat");
+
+  const tagged = polishLibrary([{
+    title: "Inception 2010 HQ YTS @mj",
+    extras: [],
+    seasons: [{ episodes: [{ title: "Inception 2010 HQ YTS @mj", episode: 1 }] }],
+  }]);
+  assert.equal(tagged[0].title, "Inception");
+  assert.equal(tagged[0].seasons[0].episodes[0].title, "Episode 1");
+
+  const items = buildLibrary([
+    video("Movies/Heat (1995)/Heat.1995.CD1.720p.YTS.@mj.mkv", 1.2 * GB),
+    video("Movies/Heat (1995)/Heat.1995.CD2.1080p.HQ.PaHe.@cc.mkv", 2.4 * GB),
+    video("Movies/Heat (1995)/Heat.1995.CD2.720p.YTS.mkv", 1.1 * GB),
+  ]);
+  assert.equal(items.length, 1);
+  const heat = items[0];
+  assert.equal(heat.type, "movie");
+  assert.equal(heat.title, "Heat");
+  assert.equal(heat.year, 1995);
+  assert.deepEqual(heat.versions.map((version) => version.part), [1, 2, 2]);
+  assert.equal(heat.versions[1].quality, "1080p");
 });

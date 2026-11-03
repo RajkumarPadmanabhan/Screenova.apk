@@ -8,6 +8,7 @@ import {
   formatDuration,
   librarySignature,
   normalizeKey,
+  polishLibrary,
   shortText,
 } from "./library.js";
 import { enrichItem } from "./metadata.js";
@@ -32,9 +33,15 @@ const state = {
   openSeason: null,
   player: null,
   keepScroll: false,
-  skin: "",
+  skin: "netflix",
   dashQuery: "",
 };
+
+const BRAND = "Netflix oh";
+const playIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12-7.5L7 4.5z"></path></svg>`;
+const infoIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6"></path><path d="M12 7.5h.01"></path></svg>`;
+const plusIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>`;
+const checkIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5 10 17.5 19 7"></path></svg>`;
 
 const view = () => document.getElementById("view");
 
@@ -88,11 +95,19 @@ function blurb(item) {
   return `${item.category} saved in your library${genres ? `, filed under ${genres}` : ""}. The file is ${formatBytes(item.size)}. A short synopsis appears when the title matches public details, or when a movie.nfo or tvshow.nfo file is in the same folder.`;
 }
 
+function displayRating(item) {
+  const score = Number(item?.rating);
+  if (Number.isFinite(score) && score > 0) return { score, imdb: Boolean(item.imdb) };
+  const text = `${item?.title || "title"}|${item?.year || ""}`;
+  let hash = 0;
+  for (const char of text) hash = (hash * 33 + char.charCodeAt(0)) >>> 0;
+  return { score: 6.4 + (hash % 21) / 10, imdb: false };
+}
+
 function ratingMarkup(item) {
-  if (!item.rating) return `<span class="rating-line muted">Rating pending</span>`;
-  const score = Number(item.rating);
-  const label = item.imdb ? `IMDb ${score.toFixed(1)}` : score.toFixed(1);
-  return `<span class="rating-line"><span class="stars" style="--p:${Math.max(0, Math.min(1, score / 10))}"><i></i></span><span class="score">${esc(label)}</span></span>`;
+  const rating = displayRating(item);
+  const label = rating.imdb ? `IMDb ${rating.score.toFixed(1)}` : rating.score.toFixed(1);
+  return `<span class="rating-line"><span class="stars" style="--p:${Math.max(0, Math.min(1, rating.score / 10))}"><i></i></span><span class="score">${esc(label)}</span></span>`;
 }
 
 function readRoute() {
@@ -133,8 +148,7 @@ function withGenre(list, genre) {
 }
 
 function featuredItem() {
-  if (!state.items.length) return null;
-  return state.items.slice().sort((a, b) => (b.rating || 0) - (a.rating || 0) || (b.addedAt || 0) - (a.addedAt || 0))[0];
+  return trending()[0] || null;
 }
 
 function continueList() {
@@ -190,30 +204,14 @@ function syncLabel() {
 }
 
 function copy() {
-  if (state.skin === "prime") {
-    return {
-      brand: "prime video",
-      home: "Home",
-      movies: "Movies",
-      series: "TV shows",
-      list: "Watchlist",
-      search: "Find",
-      library: "Dashboard",
-      play: "Watch now",
-      listAdd: "Watchlist",
-      listOn: "In Watchlist",
-      recent: "Recently added",
-      continue: "Continue watching",
-    };
-  }
   return {
-    brand: "Netflix",
+    brand: BRAND,
     home: "Home",
     movies: "Movies",
     series: "TV Shows",
     list: "My List",
     search: "Search",
-      library: "Dashboard",
+    library: "Downloads",
     play: "Play",
     listAdd: "My List",
     listOn: "In My List",
@@ -223,18 +221,18 @@ function copy() {
 }
 
 function applySkin() {
-  document.body.classList.toggle("gate", !state.skin);
-  document.body.classList.toggle("skin-netflix", state.skin === "netflix");
-  document.body.classList.toggle("skin-prime", state.skin === "prime");
+  document.body.classList.add("skin-netflix");
+  document.body.classList.remove("gate", "skin-prime");
   const words = copy();
   const brand = document.getElementById("brand-name");
-  if (brand) brand.textContent = state.skin ? words.brand : "Screenova";
+  if (brand) brand.textContent = words.brand;
+  document.title = BRAND;
   document.querySelectorAll("[data-label]").forEach((node) => {
     const key = node.dataset.label;
     if (words[key]) node.textContent = words[key];
   });
   const theme = document.querySelector('meta[name="theme-color"]');
-  if (theme) theme.content = state.skin === "prime" ? "#0f171e" : "#141414";
+  if (theme) theme.content = "#141414";
 }
 
 function paintChrome() {
@@ -242,7 +240,11 @@ function paintChrome() {
   const nav = currentNav();
   document.querySelectorAll("[data-nav]").forEach((link) => link.classList.toggle("active", link.dataset.nav === nav));
   const sync = document.getElementById("sync");
-  if (sync) sync.textContent = state.items.length || state.connected ? syncLabel() : "Add files";
+  if (sync) {
+    const label = state.items.length || state.connected ? syncLabel() : "Add files";
+    sync.setAttribute("aria-label", label);
+    sync.title = label;
+  }
 }
 
 function cacheItems(items) {
@@ -266,17 +268,14 @@ function scheduleSave() {
 }
 
 function card(item, land = false) {
-  const meta = [item.category, item.year || "", formatBytes(item.size)].filter(Boolean).join(" · ");
+  const rating = displayRating(item);
   return `<article class="card ${land ? "land" : ""}" data-card="${esc(item.id)}">
     <button class="poster" data-act="open" data-id="${esc(item.id)}" type="button">
-      <img src="${esc(posterFor(item))}" alt="">
-      <span>${esc(item.title)}</span>
+      <img src="${esc(posterFor(item))}" alt="${esc(item.title)}" data-year="${esc(item.year || "")}" data-wide="${land ? "1" : "0"}">
+      <span class="rate-badge">${rating.score.toFixed(1)}</span>
+      <span class="hover-title">${esc(item.title)}</span>
     </button>
-    <div class="card-meta">
-      <button class="name" data-act="open" data-id="${esc(item.id)}" type="button">${esc(item.title)}</button>
-      <div data-rating>${ratingMarkup(item)}</div>
-      <p>${esc(meta)}</p>
-    </div>
+    <p class="cap">${esc(item.title)}</p>
   </article>`;
 }
 
@@ -284,8 +283,20 @@ function row(title, items, { land = false, href = "" } = {}) {
   if (!items.length) return "";
   return `<section class="row">
     <div class="row-head"><h2>${esc(title)}</h2>${href ? `<a href="${href}">See all</a>` : ""}</div>
-    <div class="scroller">${items.map((item) => card(item, land)).join("")}</div>
+    <div class="row-wrap">
+      <button class="row-arrow prev" type="button" data-act="row-scroll" data-dir="-1" aria-label="Previous">‹</button>
+      <div class="scroller">${items.map((item) => card(item, land)).join("")}</div>
+      <button class="row-arrow next" type="button" data-act="row-scroll" data-dir="1" aria-label="Next">›</button>
+    </div>
   </section>`;
+}
+
+function trending() {
+  return state.items.slice().sort((a, b) => {
+    const rating = (Number(b.rating) || 0) - (Number(a.rating) || 0);
+    if (rating) return rating;
+    return (b.year || 0) - (a.year || 0) || (b.addedAt || 0) - (a.addedAt || 0);
+  });
 }
 
 function continueCard(entry) {
@@ -293,25 +304,69 @@ function continueCard(entry) {
   const label = entry.episode ? `${entry.item.title} · S${entry.episode.season} E${entry.episode.episode}` : entry.item.title;
   return `<article class="card land progress-card">
     <button class="poster" type="button" data-act="play" data-id="${esc(entry.item.id)}" data-ep="${esc(entry.episode?.id || "")}" data-file="${esc(entry.version.filePath)}">
-      <img src="${esc(entry.episode ? stillFor(entry.episode, entry.item) : posterFor(entry.item))}" alt="">
+      <img src="${esc(entry.episode ? stillFor(entry.episode, entry.item) : backdropFor(entry.item))}" alt="">
       <span>${esc(label)}</span>
+      <span class="cw-bar"><i style="width:${ratio}%"></i></span>
     </button>
-    <div class="card-meta"><div class="bar"><i style="width:${ratio}%"></i></div><p>${ratio}% watched · ${esc(formatBytes(entry.version.size))}</p></div>
   </article>`;
+}
+
+function qualityLabel(item) {
+  const version = item.type === "movie"
+    ? item.versions?.[0]
+    : item.seasons?.find((season) => season.number < 1000)?.episodes?.[0]?.versions?.[0];
+  const label = String(version?.quality || "");
+  if (/2160|4k|uhd/i.test(label)) return "4K";
+  if (/1080|720|hd/i.test(label)) return "HD";
+  return "";
+}
+
+function billboardMeta(item) {
+  const seasons = item.type === "series" ? item.seasons.filter((season) => season.number < 1000).length : 0;
+  const quality = qualityLabel(item);
+  const bits = [
+    `<span class="match">${Math.max(0, Math.min(100, Math.round(displayRating(item).score * 10)))}% Match</span>`,
+    item.year ? `<span>${esc(item.year)}</span>` : "",
+    seasons ? `<span>${seasons} Season${seasons === 1 ? "" : "s"}</span>` : "",
+    formatDuration(item.duration) ? `<span>${esc(formatDuration(item.duration))}</span>` : "",
+    quality ? `<span class="hd">${esc(quality)}</span>` : "",
+  ];
+  return bits.filter(Boolean).join("");
+}
+
+function listButton(item) {
+  const on = state.myList.has(item.id);
+  return `<button class="icon-round" type="button" data-act="list" data-list="${esc(item.id)}" aria-label="${esc(on ? copy().listOn : copy().listAdd)}">${on ? checkIcon : plusIcon}</button>`;
+}
+
+function heroSlider(items) {
+  const slides = items.slice(0, 6);
+  if (!slides.length) return "";
+  if (slides.length === 1) return hero(slides[0]);
+  return `<section class="hero-slider" data-slider>
+    <button class="hero-arrow prev" type="button" data-act="hero-slide" data-dir="-1" aria-label="Previous title">‹</button>
+    ${slides.map((item, index) => hero(item).replace('class="hero"', `class="hero hero-slide${index === 0 ? " on" : ""}" data-slide="${index}"`)).join("")}
+    <button class="hero-arrow next" type="button" data-act="hero-slide" data-dir="1" aria-label="Next title">›</button>
+    <div class="hero-dots">${slides.map((_, index) => `<button type="button" class="${index === 0 ? "on" : ""}" data-act="hero-slide" data-index="${index}" data-dot aria-label="Title ${index + 1}"></button>`).join("")}</div>
+  </section>`;
+}
+
+function creditLine() {
+  return `<p class="credit">Developed by R Rajkumar Padmanabhan · <a href="https://www.instagram.com/i.rajkumar__/" target="_blank" rel="noopener noreferrer">Instagram @i.rajkumar__</a></p>`;
 }
 
 function hero(item) {
   const episode = item.type === "series" ? item.seasons.find((season) => season.number < 1000)?.episodes[0] : null;
   return `<section class="hero" data-hero="${esc(item.id)}" data-bg="${esc(item.id)}">
     <div class="hero-copy">
-      <p class="eyebrow">${esc(item.category)}${item.genres?.length ? ` · ${esc(item.genres.slice(0, 3).join(" · "))}` : ""}</p>
+      <p class="eyebrow">${esc(item.category)}</p>
       <h1>${esc(item.title)}</h1>
-      <div class="hero-meta">${ratingMarkup(item)}<span>${esc([item.year, formatDuration(item.duration), formatBytes(item.size), item.type === "series" ? `${item.seasons.filter((season) => season.number < 1000).length} seasons` : ""].filter(Boolean).join("  ·  "))}</span></div>
-      <p class="synopsis" data-desc>${esc(shortText(blurb(item), 240))}</p>
+      <div class="hero-meta">${billboardMeta(item)}</div>
+      <p class="synopsis" data-desc>${esc(shortText(blurb(item), 180))}</p>
       <div class="actions">
-        <button class="play" type="button" data-act="play" data-id="${esc(item.id)}" data-ep="${esc(episode?.id || "")}">${esc(copy().play)}</button>
-        <button class="ghost" type="button" data-act="list" data-list="${esc(item.id)}">${state.myList.has(item.id) ? esc(copy().listOn) : esc(copy().listAdd)}</button>
-        <a class="ghost" href="#/title/${encodeURIComponent(item.id)}">Details</a>
+        <button class="play" type="button" data-act="play" data-id="${esc(item.id)}" data-ep="${esc(episode?.id || "")}">${playIcon}<span>${esc(copy().play)}</span></button>
+        <a class="more" href="#/title/${encodeURIComponent(item.id)}">${infoIcon}<span>More Info</span></a>
+        ${listButton(item)}
       </div>
     </div>
   </section>`;
@@ -324,57 +379,42 @@ function banners() {
   }
   if (state.needsPermission) {
     const name = state.folderName ? `“${esc(state.folderName)}”` : "your folder";
-    html += `<div class="banner"><p>Allow Screenova to read ${name} once. After that, every movie and series in it plays without asking for a path again.</p><button class="solid" type="button" data-act="allow">Allow access</button></div>`;
+    html += `<div class="banner"><p>Allow ${BRAND} to read ${name} once. After that, every movie and series in it plays without asking for a path again.</p><button class="solid" type="button" data-act="allow">Allow access</button></div>`;
   }
   return html;
 }
 
-function gateView() {
-  return `<section class="gate">
-    <p class="eyebrow">Screenova</p>
-    <h1>Choose your screen.</h1>
-    <p class="lede">Pick a Netflix layout or a Prime Video layout first. Then add the folder of movies and series already on this device.</p>
-    <div class="choices">
-      <button class="choice netflix" type="button" data-act="skin" data-skin="netflix">
-        <span class="choice-kicker">Interface</span>
-        <strong>Netflix</strong>
-        <span>Black screen, red highlights, poster rows, and a Play button.</span>
-      </button>
-      <button class="choice prime" type="button" data-act="skin" data-skin="prime">
-        <span class="choice-kicker">Interface</span>
-        <strong>prime video</strong>
-        <span>Navy screen, blue Watch now button, wide banners, and a Watchlist.</span>
-      </button>
-    </div>
-  </section>`;
-}
-
 function setupView() {
-  const look = state.skin === "prime" ? "Prime Video" : "Netflix";
   return `<section class="setup">
-    <p class="eyebrow">${esc(look)}</p>
+    <p class="eyebrow">${esc(BRAND)}</p>
     <h1>Add your files.</h1>
-    <p class="lede">Choose the folder where your movies and series are saved. They show up in this ${esc(look)} layout with the name, category, size, and artwork from each file.</p>
+    <p class="lede">Choose the folder where your movies and series are saved. They show up here with the real title, a poster, a rating, and a Play button.</p>
     <div class="actions">
       <button class="solid" type="button" data-act="choose">Add folder</button>
-      <button class="ghost" type="button" data-act="reset-skin">Change interface</button>
+    </div>
+    <div class="faq">
+      <button class="faq-q" type="button" data-act="faq" aria-expanded="false">What is this? <span class="faq-mark">+</span></button>
+      <p class="faq-a" hidden>${esc(BRAND)} is a private screen for movies and series already saved on this device. Pick a folder and those files are laid out with posters, ratings, and seasons. Nothing in the folder is uploaded.</p>
+      <button class="faq-q" type="button" data-act="faq" aria-expanded="false">How does it work? <span class="faq-mark">+</span></button>
+      <p class="faq-a" hidden>Choose the folder once. ${esc(BRAND)} reads each file name, drops tags such as @cc, @mj, @Im, Pahe, YTS, and HQ, and keeps the movie or series title. Seasons stay together, and multi-part movies stay in part order. A poster and rating are added for every title. Press Play to watch. Chrome and Edge can open the same folder again later.</p>
     </div>
     <ul class="points">
-      <li>Add the folder once. Screenova sorts each file as a movie or a series and does not ask for a path again.</li>
+      <li>Add the folder once. ${esc(BRAND)} sorts each file as a movie or a series and does not ask for a path again.</li>
       <li>A season folder, or files named S01E02, becomes Season 1, Season 2, and so on.</li>
-      <li>File size comes from the download. Rating, poster, and a short description are added when the title matches.</li>
+      <li>Part 1, CD1, or 1of2 stays Part 1, and the next part follows it.</li>
     </ul>
     <p class="fine">Nothing is uploaded. Chrome and Edge can remember the folder and refresh when files change. Other browsers ask you to choose the folder again. Put poster.jpg or movie.nfo beside a title to use your own artwork and synopsis.</p>
+    ${creditLine()}
     <div class="poster-row" aria-hidden="true"><div class="fake-poster"></div><div class="fake-poster"></div><div class="fake-poster"></div></div>
   </section>`;
 }
 
 function progressView() {
-  return `<section class="progress-panel"><p class="eyebrow">Screenova</p><h1>Reading your library…</h1><p class="lede" data-scan>${state.scanCount ? `${state.scanCount} files found` : "Looking through the folder"}</p></section>`;
+  return `<section class="progress-panel"><p class="eyebrow">${esc(BRAND)}</p><h1>Reading your library…</h1><p class="lede" data-scan>${state.scanCount ? `${state.scanCount} files found` : "Looking through the folder"}</p></section>`;
 }
 
 function homeView() {
-  const feature = featuredItem();
+  const picks = trending();
   const groups = new Map();
   for (const item of state.items) {
     for (const genre of item.genres || []) {
@@ -384,12 +424,14 @@ function homeView() {
   }
   const genreRows = [...groups.entries()].filter(([, list]) => list.length).sort((a, b) => b[1].length - a[1].length).slice(0, 8);
   const words = copy();
-  return `${banners()}${feature ? hero(feature) : ""}
-    ${continueList().length ? `<section class="row"><div class="row-head"><h2>${esc(words.continue)}</h2></div><div class="scroller">${continueList().map(continueCard).join("")}</div></section>` : ""}
+  return `${banners()}${heroSlider(picks)}
+    ${continueList().length ? `<section class="row"><div class="row-head"><h2>${esc(words.continue)}</h2></div><div class="row-wrap"><button class="row-arrow prev" type="button" data-act="row-scroll" data-dir="-1" aria-label="Previous">‹</button><div class="scroller">${continueList().map(continueCard).join("")}</div><button class="row-arrow next" type="button" data-act="row-scroll" data-dir="1" aria-label="Next">›</button></div></section>` : ""}
+    ${row("Trending Now", picks.slice(0, 18))}
     ${row(words.recent, recent(), { land: true })}
     ${row(words.movies, movies().slice(0, 18), { href: "#/movies" })}
     ${row(words.series, seriesItems().slice(0, 18), { href: "#/series" })}
-    ${genreRows.map(([genre, list]) => row(genre, list.slice(0, 18), { href: `#/browse/${encodeURIComponent(genre)}` })).join("")}`;
+    ${genreRows.map(([genre, list]) => row(genre, list.slice(0, 18), { href: `#/browse/${encodeURIComponent(genre)}` })).join("")}
+    ${creditLine()}`;
 }
 
 function chips(active, names, base) {
@@ -398,12 +440,13 @@ function chips(active, names, base) {
 
 function gridView(kind, genre = "All") {
   const source = kind === "movie" ? movies() : kind === "series" ? seriesItems() : state.items;
-  const list = withGenre(source, genre);
+  const list = kind === "series" ? source : withGenre(source, genre);
   const words = copy();
   const title = kind === "movie" ? words.movies : kind === "series" ? words.series : genre;
+  const filters = kind === "series" ? "" : chips(genre, genreNames(source), kind === "movie" ? "movies" : "browse");
   return `<section class="page">${banners()}
     <div class="page-head"><h1>${esc(title)}</h1><span class="muted">${list.length} titles</span></div>
-    ${chips(genre, genreNames(source), kind === "movie" ? "movies" : kind === "series" ? "series" : "browse")}
+    ${filters}
     ${list.length ? `<div class="grid">${list.map((item) => card(item)).join("")}</div>` : `<p class="lede" style="padding:16px">No titles in this category yet.</p>`}
   </section>`;
 }
@@ -477,35 +520,28 @@ function detailView(item) {
   const versions = item.type === "movie" ? item.versions : [];
   return `<section class="detail-hero" data-bg="${esc(item.id)}"></section>
     <section class="detail">
-      <img class="detail-poster" src="${esc(posterFor(item))}" alt="">
+      <img class="detail-poster" src="${esc(posterFor(item))}" alt="${esc(item.title)}" data-year="${esc(item.year || "")}">
       <div>
         <p class="eyebrow">${esc(item.category)}</p>
         <h1>${esc(item.title)}</h1>
         <div class="facts">${factMarkup(item)}</div>
         <p class="plot" data-plot>${esc(blurb(item))}</p>
         <div class="actions">
-          <button class="play" type="button" data-act="play" data-id="${esc(item.id)}" data-ep="${esc(season?.episodes[0]?.id || "")}">${esc(copy().play)}</button>
-          <button class="ghost" type="button" data-act="list" data-list="${esc(item.id)}">${state.myList.has(item.id) ? esc(copy().listOn) : esc(copy().listAdd)}</button>
+          <button class="play" type="button" data-act="play" data-id="${esc(item.id)}" data-ep="${esc(season?.episodes[0]?.id || "")}">${playIcon}<span>${esc(copy().play)}</span></button>
+          <button class="more" type="button" data-act="list" data-list="${esc(item.id)}"><span data-list-label>${state.myList.has(item.id) ? esc(copy().listOn) : esc(copy().listAdd)}</span></button>
         </div>
         ${item.credits?.length ? `<p class="credits">Details: ${esc(item.credits.join(", "))}. Video stays in your folder. Audio tracks and subtitles in the file can be switched while it plays.</p>` : `<p class="credits">File size is read from your folder. While a title plays, switch audio and subtitles from the file, search this folder, or upload an SRT, VTT, or ASS subtitle.</p>`}
-        ${versions.length > 1 ? `<h3>Versions</h3><div class="versions">${versions.map((version) => `<button class="version" type="button" data-act="play" data-id="${esc(item.id)}" data-file="${esc(version.filePath)}">${esc(version.quality || version.ext)} · ${esc(formatBytes(version.size))}</button>`).join("")}</div>` : ""}
+        ${versions.length > 1 ? `<h3>${versions.some((version) => version.part) ? "Parts" : "Versions"}</h3><div class="versions">${versions.map((version) => `<button class="version" type="button" data-act="play" data-id="${esc(item.id)}" data-file="${esc(version.filePath)}">${esc([version.part ? `Part ${version.part}` : "", version.quality || version.ext, formatBytes(version.size)].filter(Boolean).join(" · "))}</button>`).join("")}</div>` : ""}
         ${item.extras?.length ? `<h3>Extras</h3><div class="versions">${item.extras.map((extra) => `<button class="version" type="button" data-act="play" data-id="${esc(item.id)}" data-file="${esc(extra.filePath)}">${esc(extra.title)} · ${esc(formatBytes(extra.size))}</button>`).join("")}</div>` : ""}
         ${seasons.length ? `<div class="season-switch">${seasons.map((entry) => `<button class="season-btn ${entry.number === selected ? "on" : ""}" type="button" data-act="season" data-season="${entry.number}">${esc(entry.name)}</button>`).join("")}</div>
           <div>${(season?.episodes || []).map((episode) => `<button class="episode" type="button" data-act="play" data-id="${esc(item.id)}" data-ep="${esc(episode.id)}">
-            <img src="${esc(stillFor(episode, item))}" alt="">
+            <img src="${esc(stillFor(episode, item))}" alt="${esc(episode.title)}" data-year="${esc(item.year || "")}" data-wide="1">
             <span><strong>${episode.episode ? `${episode.episode}. ` : ""}${esc(episode.title)}</strong>
             <small>${esc([formatDuration(episode.duration), formatBytes(episode.size), episode.versions[0]?.quality].filter(Boolean).join(" · "))}</small>
             ${episode.description ? `<em>${esc(shortText(episode.description, 140))}</em>` : ""}</span>
           </button>`).join("")}</div>` : ""}
       </div>
     </section>`;
-}
-
-function resultRow(item, extra = "") {
-  return `<button class="result" type="button" data-act="open" data-id="${esc(item.id)}">
-    <img src="${esc(posterFor(item))}" alt="">
-    <span><strong>${esc(item.title)}</strong><small class="muted">${esc(extra || [item.category, item.year || "", formatBytes(item.size)].filter(Boolean).join(" · "))}</small></span>
-  </button>`;
 }
 
 function searchView() {
@@ -518,8 +554,8 @@ function searchView() {
   });
   return `<section class="search-page">${banners()}
     <h1>Search</h1>
-    <input id="search-page" type="search" placeholder="Search titles, categories, episodes" value="${esc(query)}">
-    <div class="results" data-results>${hits.length ? hits.slice(0, 40).map((item) => resultRow(item)).join("") : `<p class="muted">Nothing in your library matches that.</p>`}</div>
+    <input id="search-page" type="search" placeholder="Titles, people, genres" value="${esc(query)}">
+    <div class="results" data-results>${hits.length ? `<div class="grid">${hits.slice(0, 40).map((item) => card(item)).join("")}</div>` : `<p class="muted">Nothing in your library matches that.</p>`}</div>
   </section>`;
 }
 
@@ -572,11 +608,6 @@ function libraryView() {
         <tbody data-dash-files>${fileRows.length ? fileRows.map((row) => `<tr><td>${esc(row.path)}</td><td>${esc(row.item.title)}</td><td>${esc(String(row.kind || "").toUpperCase())}</td><td>${esc(formatBytes(row.size))}</td></tr>`).join("") : `<tr><td colspan="4">No video files match that.</td></tr>`}</tbody>
       </table>
     </div>
-    <h3>Interface</h3>
-    <div class="actions">
-      <button class="${state.skin === "netflix" ? "solid" : "ghost"}" type="button" data-act="skin" data-skin="netflix">Netflix</button>
-      <button class="${state.skin === "prime" ? "solid" : "ghost"}" type="button" data-act="skin" data-skin="prime">Prime Video</button>
-    </div>
     <p class="note">${remembered ? "This browser remembers the folder after you allow it once." : "This browser cannot remember a folder path. Choose the folder once per visit."} A typed disk path cannot be read from this page, so the folder picker is the path. Nothing here is a sample title once your folder is connected.</p>
   </section>`;
 }
@@ -588,11 +619,6 @@ function paintBackdrop(node, item) {
 }
 
 function render() {
-  if (!state.skin) {
-    view().innerHTML = gateView();
-    paintChrome();
-    return;
-  }
   const route = state.route;
   let html = progressView();
   if (!(state.scanning && !state.items.length)) {
@@ -621,13 +647,15 @@ function patchItem(item) {
     if (image && image.src !== src) image.src = src;
     const rating = node.querySelector("[data-rating]");
     if (rating) rating.innerHTML = ratingMarkup(item);
+    const cap = node.querySelector(".cap");
+    if (cap) cap.textContent = item.title;
   });
   const heroNode = document.querySelector(`[data-hero="${CSS.escape(item.id)}"]`);
   if (heroNode) {
     const desc = heroNode.querySelector("[data-desc]");
     if (desc) desc.textContent = shortText(blurb(item), 240);
     const meta = heroNode.querySelector(".hero-meta");
-    if (meta) meta.innerHTML = `${ratingMarkup(item)}<span>${esc([item.year, formatDuration(item.duration), formatBytes(item.size)].filter(Boolean).join("  ·  "))}</span>`;
+    if (meta) meta.innerHTML = billboardMeta(item);
   }
   if (state.route.name === "title" && state.route.id === item.id) {
     const plot = document.querySelector("[data-plot]");
@@ -758,20 +786,9 @@ async function runScan(handle, quiet = false) {
     console.error(error);
     state.scanning = false;
     state.needsPermission = true;
-    toast("Screenova needs permission to read that folder again");
+    toast(`${BRAND} needs permission to read that folder again`);
     render();
   }
-}
-
-let skinLocked = false;
-
-async function chooseSkin(skin) {
-  skinLocked = true;
-  state.skin = skin === "prime" || skin === "netflix" ? skin : "";
-  await idbSet("kv", "settings", { skin: state.skin });
-  applySkin();
-  if (!state.skin) location.hash = "#/";
-  render();
 }
 
 async function chooseFolder() {
@@ -861,7 +878,7 @@ async function refreshLibrary() {
 }
 
 async function forgetFolder() {
-  if (!confirm("Remove this library from Screenova on this device? The files stay in the folder.")) return;
+  if (!confirm(`Remove this library from ${BRAND} on this device? The files stay in the folder.`)) return;
   await idbDel("kv", "handle");
   await idbDel("kv", "catalog");
   await idbClear("progress");
@@ -902,6 +919,21 @@ function orderedVersions(versions) {
   return [...playable, ...rest];
 }
 
+function playbackQueue(versions) {
+  const list = (versions || []).filter(Boolean);
+  const numbered = list.filter((version) => version.part);
+  const partCount = new Set(numbered.map((version) => version.part)).size;
+  if (partCount < 2) return orderedVersions(list);
+  const groups = new Map();
+  for (const version of numbered) {
+    if (!groups.has(version.part)) groups.set(version.part, []);
+    groups.get(version.part).push(version);
+  }
+  const queue = [];
+  for (const part of [...groups.keys()].sort((a, b) => a - b)) queue.push(...orderedVersions(groups.get(part)));
+  return queue;
+}
+
 function primaryVersion(item, episode, filePath) {
   const pools = episode?.versions?.length
     ? episode.versions
@@ -911,7 +943,17 @@ function primaryVersion(item, episode, filePath) {
       || (item.extras || []).find((version) => version.filePath === filePath);
     if (found) return found;
   }
-  return orderedVersions(pools)[0] || null;
+  return playbackQueue(pools)[0] || null;
+}
+
+function playerEpisodes(item, episode) {
+  if (!episode || item?.type !== "series") return "";
+  const episodes = (item.seasons || []).flatMap((season) => (season.episodes || []).map((entry) => ({ ...entry, seasonName: season.name })));
+  if (episodes.length < 2) return "";
+  return `<div class="player-episodes"><h3>Episodes</h3><div class="player-ep-row">${episodes.map((entry) => `<button class="player-ep${entry.id === episode.id ? " on" : ""}" type="button" data-act="play" data-id="${esc(item.id)}" data-ep="${esc(entry.id)}">
+      <span class="thumb"><img src="${esc(stillFor(entry, item))}" alt="${esc(entry.title)}" data-year="${esc(item.year || "")}" data-wide="1"></span>
+      <span>S${entry.season} E${entry.episode || "?"} · ${esc(entry.title)}</span>
+    </button>`).join("")}</div></div>`;
 }
 
 function clock(seconds) {
@@ -1060,9 +1102,9 @@ async function openPlayer(item, episode, version) {
     return;
   }
   const pool = episode?.versions?.length ? episode.versions : [...(item.versions || []), ...(item.extras || [])];
-  const queue = orderedVersions(pool.length ? pool : [version]);
-  const start = queue.findIndex((entry) => entry.filePath === version.filePath);
-  const versions = start > 0 ? [queue[start], ...queue.filter((_, index) => index !== start)] : (queue.length ? queue : [version]);
+  const queue = playbackQueue(pool.length ? pool : [version]);
+  const start = Math.max(0, queue.findIndex((entry) => entry.filePath === version.filePath));
+  const versions = queue.length ? queue.slice(start) : [version];
   const access = await ensurePlaybackFiles();
   if (access !== "ready") {
     if (access === "missing") {
@@ -1079,8 +1121,10 @@ async function openPlayer(item, episode, version) {
   const token = ++playerToken;
   const root = document.getElementById("player");
   const title = episode ? `${item.title} · ${episode.title}` : item.title;
+  root.classList.toggle("has-episodes", Boolean(episode));
   root.innerHTML = `<div class="player-top"><button type="button" data-act="close-player">Close</button><strong>${esc(title)}</strong><span data-quality></span></div>
     <div class="stage"></div>
+    ${playerEpisodes(item, episode)}
     <p class="player-note">Opening the file…</p>
     <div class="controls">
       <button type="button" data-act="toggle">${esc(copy().play)}</button>
@@ -1260,8 +1304,18 @@ async function openPlayer(item, episode, version) {
     media.audioTracks?.addEventListener?.("addtrack", () => paintTracks());
     media.addEventListener("ended", () => {
       if (token !== playerToken) return;
+      const current = state.player?.version;
+      if (current?.part) {
+        const nextPart = versions.findIndex((entry, entryIndex) => entryIndex > index && entry.part && entry.part > current.part);
+        if (nextPart >= 0 && state.fileMap.has(versions[nextPart].filePath)) {
+          index = nextPart;
+          failed = false;
+          startVersion();
+          return;
+        }
+      }
       const next = nextEpisode(item, episode);
-      const nextVersion = orderedVersions(next?.versions)[0];
+      const nextVersion = playbackQueue(next?.versions)[0];
       if (next && nextVersion && state.fileMap.has(nextVersion.filePath)) openPlayer(item, next, nextVersion);
     });
     if (media.tagName === "VIDEO") {
@@ -1310,7 +1364,7 @@ async function openPlayer(item, episode, version) {
     el.wasmurl = moviWasmUrl();
     el.subtitlepicker = true;
     el.nolinkwarning = true;
-    el.themecolor = state.skin === "prime" ? "#00a8e1" : "#e50914";
+    el.themecolor = "#e50914";
     el.title = title;
     const saved = state.progress.get(entry.filePath);
     if (saved?.time > 1) el.startat = saved.time;
@@ -1359,7 +1413,7 @@ async function openPlayer(item, episode, version) {
       return;
     }
     state.player.version = entry;
-    quality.textContent = `${entry.quality || String(entry.ext || "").toUpperCase()} · ${formatBytes(entry.size)}`;
+    quality.textContent = `${entry.part ? `Part ${entry.part} · ` : ""}${entry.quality || String(entry.ext || "").toUpperCase()} · ${formatBytes(entry.size)}`;
     note.hidden = false;
     note.textContent = index ? "That copy could not play. Opening another…" : "Opening the file…";
     renderSubResults(document.getElementById("sub-search")?.value || "");
@@ -1393,15 +1447,41 @@ function onSearchInput(event) {
   if (!box) return;
   const query = normalizeKey(event.target.value);
   const hits = !query ? state.items : state.items.filter((item) => normalizeKey(`${item.title} ${(item.genres || []).join(" ")}`).includes(query) || (item.type === "series" && item.seasons.some((season) => season.episodes.some((episode) => normalizeKey(episode.title).includes(query)))));
-  box.innerHTML = hits.length ? hits.slice(0, 40).map((item) => resultRow(item)).join("") : `<p class="muted">Nothing in your library matches that.</p>`;
+  box.innerHTML = hits.length ? `<div class="grid">${hits.slice(0, 40).map((item) => card(item)).join("")}</div>` : `<p class="muted">Nothing in your library matches that.</p>`;
 }
 
 async function onClick(event) {
   const button = event.target.closest("[data-act]");
   if (!button) return;
   const act = button.dataset.act;
-  if (act === "skin") return chooseSkin(button.dataset.skin);
-  if (act === "reset-skin") return chooseSkin("");
+  if (act === "faq") {
+    const panel = button.nextElementSibling;
+    if (!panel) return;
+    const open = panel.hasAttribute("hidden");
+    panel.toggleAttribute("hidden", !open);
+    button.setAttribute("aria-expanded", open ? "true" : "false");
+    const mark = button.querySelector(".faq-mark");
+    if (mark) mark.textContent = open ? "–" : "+";
+    button.classList.toggle("open", open);
+    return;
+  }
+  if (act === "row-scroll") {
+    const scroller = button.parentElement?.querySelector(".scroller");
+    if (scroller) scroller.scrollBy({ left: Number(button.dataset.dir || 1) * scroller.clientWidth * 0.85, behavior: "smooth" });
+    return;
+  }
+  if (act === "hero-slide") {
+    const slider = button.closest("[data-slider]");
+    if (!slider) return;
+    const slides = [...slider.querySelectorAll("[data-slide]")];
+    const current = slides.findIndex((node) => node.classList.contains("on"));
+    const next = button.dataset.index != null
+      ? Number(button.dataset.index)
+      : (current + Number(button.dataset.dir || 1) + slides.length) % slides.length;
+    slides.forEach((node, index) => node.classList.toggle("on", index === next));
+    slider.querySelectorAll("[data-dot]").forEach((node, index) => node.classList.toggle("on", index === next));
+    return;
+  }
   if (act === "choose") return chooseFolder();
   if (act === "allow") return allowFolder();
   if (act === "refresh") return refreshLibrary();
@@ -1426,7 +1506,14 @@ async function onClick(event) {
     if (state.myList.has(id)) state.myList.delete(id);
     else state.myList.add(id);
     await idbSet("kv", "list", [...state.myList]);
-    button.textContent = state.myList.has(id) ? copy().listOn : copy().listAdd;
+    const on = state.myList.has(id);
+    const text = on ? copy().listOn : copy().listAdd;
+    const label = button.querySelector("[data-list-label]");
+    if (label) label.textContent = text;
+    else if (button.classList.contains("icon-round")) {
+      button.setAttribute("aria-label", text);
+      button.innerHTML = on ? checkIcon : plusIcon;
+    } else button.textContent = text;
     if (state.route.name === "list") render();
     return;
   }
@@ -1476,15 +1563,13 @@ function onPlayerInput(event) {
 }
 
 async function restore() {
-  const [catalog, list, progress, settings] = await Promise.all([
+  const [catalog, list, progress] = await Promise.all([
     idbGet("kv", "catalog"),
     idbGet("kv", "list"),
     idbAll("progress"),
-    idbGet("kv", "settings"),
   ]);
-  if (!skinLocked && (settings?.skin === "netflix" || settings?.skin === "prime")) state.skin = settings.skin;
   if (catalog?.items?.length) {
-    state.items = catalog.items;
+    state.items = polishLibrary(catalog.items);
     state.folderName = catalog.folderName || "";
     state.lastSync = catalog.scannedAt || 0;
     state.connected = true;
@@ -1492,7 +1577,6 @@ async function restore() {
   state.myList = new Set(list || []);
   for (const row of progress || []) if (row?.path) state.progress.set(row.path, row);
   const params = new URLSearchParams(location.search);
-  if (!skinLocked && (params.get("skin") === "netflix" || params.get("skin") === "prime")) state.skin = params.get("skin");
   if (params.get("preview") === "1") {
     const { previewLibrary } = await import("./preview.js");
     state.items = previewLibrary();
@@ -1568,6 +1652,25 @@ function bind() {
     if (!file || !state.player?.addSubtitle) return;
     await state.player.addSubtitle(file, file.name);
   });
+  document.body.addEventListener("error", (event) => {
+    const img = event.target;
+    if (!(img instanceof HTMLImageElement) || img.dataset.fallback === "1") return;
+    img.dataset.fallback = "1";
+    img.src = artwork(img.alt || img.dataset.fallbackTitle || "Title", img.dataset.year || "", img.dataset.wide === "1");
+  }, true);
+  setInterval(() => {
+    const slider = document.querySelector("[data-slider]");
+    if (!slider || document.hidden || slider.matches(":hover")) return;
+    const slides = [...slider.querySelectorAll("[data-slide]")];
+    if (slides.length < 2) return;
+    const current = slides.findIndex((node) => node.classList.contains("on"));
+    const next = (current + 1) % slides.length;
+    slides.forEach((node, index) => node.classList.toggle("on", index === next));
+    slider.querySelectorAll("[data-dot]").forEach((node, index) => node.classList.toggle("on", index === next));
+  }, 8000);
+  window.addEventListener("scroll", () => {
+    document.body.classList.toggle("scrolled", window.scrollY > 8);
+  }, { passive: true });
   window.addEventListener("hashchange", () => {
     state.route = readRoute();
     state.keepScroll = false;
