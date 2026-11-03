@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/app.css?v=9">
+  <link rel="stylesheet" href="css/app.css?v=12">
 </head>
 <body class="skin-netflix">
   <div class="app">
@@ -39,6 +39,7 @@
         <button class="icon folder" type="button" data-act="choose" aria-label="Choose folder">
           <svg viewBox="0 0 24 24"><path d="M3 7.5h6l2 2H21V19a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 19V7.5z"></path><path d="M3 7.5V6A1.5 1.5 0 0 1 4.5 4.5H9l2 2"></path></svg>
         </button>
+        <button id="logout" class="logout" type="button" data-act="logout" hidden>Sign Out</button>
         <a class="avatar" href="#/library" aria-label="Library">N</a>
       </div>
     </header>
@@ -54,6 +55,6 @@
   <div id="toast" class="toast" role="status"></div>
   <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
   <input id="sub-file" type="file" accept=".srt,.vtt,.ass,.ssa,text/vtt,application/x-subrip" hidden>
-  <script type="module" src="js/app.js?v=9"></script>
+  <script type="module" src="js/app.js?v=11"></script>
 </body>
 </html>

@@ -54,7 +54,7 @@ function stripHtml(value) {
 }
 
 function cacheKey(item) {
-  return `v3:${OMDB_KEY}:${item.type}:${item.title.toLowerCase()}:${item.year || ""}`;
+  return `v4:${OMDB_KEY}:${item.type}:${item.title.toLowerCase()}:${item.year || ""}`;
 }
 
 function clean(value) {
@@ -210,6 +210,52 @@ async function fromWikipedia(item) {
   };
 }
 
+function artworkUrl(url) {
+  return String(url || "").replace(/^http:\/\//i, "https://").replace(/\d+x\d+bb/, "600x600bb");
+}
+
+async function fromItunes(item) {
+  const entity = item.type === "series" ? "tvSeason" : "movie";
+  const data = await fetchJson(`https://itunes.apple.com/search?term=${encodeURIComponent(item.title)}&entity=${entity}&limit=8`);
+  let best = null;
+  let bestScore = 0;
+  for (const hit of data?.results || []) {
+    const name = String(hit.collectionName || hit.trackName || "").replace(/,?\s*season\s+\d+$/i, "").trim();
+    const year = Number(String(hit.releaseDate || "").slice(0, 4)) || null;
+    const score = titleScore(name, item.title);
+    const yearOk = item.type === "series" || !yearsClash(item.year, year);
+    if (!yearOk || score < 0.8 || score <= bestScore || !hit.artworkUrl100) continue;
+    best = hit;
+    bestScore = score;
+  }
+  if (!best?.artworkUrl100) return null;
+  const poster = artworkUrl(best.artworkUrl100);
+  return {
+    source: "artwork",
+    title: item.title,
+    year: item.year,
+    rating: null,
+    imdb: false,
+    description: "",
+    genres: [],
+    posterUrl: poster,
+    backdropUrl: poster,
+    runtime: null,
+    episodes: [],
+  };
+}
+
+export async function remotePoster(title, year, type) {
+  const name = String(title || "").trim();
+  if (!name) return "";
+  const art = await fromItunes({
+    title: name,
+    year: Number(year) || null,
+    type: type === "series" ? "series" : "movie",
+  });
+  return art?.posterUrl || "";
+}
+
 function omdbUrl(params) {
   const query = new URLSearchParams({ apikey: OMDB_KEY, ...params });
   return `${OMDB}?${query.toString()}`;
@@ -260,23 +306,34 @@ async function fromOmdb(item) {
   return meta;
 }
 
+function withPoster(meta, art) {
+  if (!art?.posterUrl) return meta;
+  if (!meta || meta.missed) return { ...art, missed: false, omdbMissed: Boolean(meta?.missed) };
+  if (!meta.posterUrl) meta.posterUrl = art.posterUrl;
+  else if (meta.posterUrl !== art.posterUrl) meta.posterAlts = [...new Set([...(meta.posterAlts || []), art.posterUrl])];
+  if (!meta.backdropUrl) meta.backdropUrl = art.backdropUrl || art.posterUrl;
+  return meta;
+}
+
 async function lookup(item) {
   const omdb = await fromOmdb(item);
+  let meta = omdb;
   if (omdb?.invalidKey) {
     const extra = await legacyLookup(item);
-    return extra ? { ...extra, invalidKey: true } : { invalidKey: true, missed: true };
-  }
-  if (omdb && !omdb.missed) {
+    meta = extra ? { ...extra, invalidKey: true } : { invalidKey: true, missed: true };
+  } else if (omdb && !omdb.missed) {
     if (item.type === "series") {
       const extra = await fromTvMaze(item);
       if (extra?.episodes?.length) omdb.episodes = extra.episodes;
+      if (!omdb.posterUrl && extra?.posterUrl) omdb.posterUrl = extra.posterUrl;
       if (extra?.backdropUrl) omdb.backdropUrl = extra.backdropUrl;
     }
-    return omdb;
+    meta = omdb;
+  } else {
+    const extra = await legacyLookup(item);
+    meta = extra ? (omdb?.missed ? { ...extra, omdbMissed: true } : extra) : omdb;
   }
-  const extra = await legacyLookup(item);
-  if (!extra) return omdb;
-  return omdb?.missed ? { ...extra, omdbMissed: true } : extra;
+  return withPoster(meta, await fromItunes(item));
 }
 
 async function legacyLookup(item) {
@@ -323,7 +380,14 @@ export function applyMeta(item, meta) {
     item.imdb = Boolean(meta.imdb);
     changed = true;
   }
-  if (!item.posterPath) fill("posterUrl", meta.posterUrl);
+  if (!item.posterPath) fill("posterUrl", meta.posterUrl ? artworkUrl(meta.posterUrl) : "");
+  if (meta.posterAlts?.length) {
+    const merged = [...new Set([...(item.posterAlts || []), ...meta.posterAlts.map(artworkUrl)])];
+    if (merged.length !== (item.posterAlts || []).length) {
+      item.posterAlts = merged;
+      changed = true;
+    }
+  }
   if (!item.backdropPath) fill("backdropUrl", meta.backdropUrl);
   if (!item.year) fill("year", meta.year);
   fill("director", meta.director);
@@ -340,7 +404,7 @@ export function applyMeta(item, meta) {
   if (item.type === "series" && meta.episodes?.length) {
     for (const season of item.seasons || []) {
       for (const episode of season.episodes) {
-        const remote = meta.episodes.find((entry) => entry.season === episode.season && entry.episode === episode.episode);
+        const remote = meta.episodes.find((entry) => Number(entry.season) === Number(episode.season) && Number(entry.episode) === Number(episode.episode));
         if (!remote) continue;
         if (genericEpisodeTitle(episode.title) && remote.title) {
           episode.title = remote.title;
@@ -380,7 +444,7 @@ export function enrichItem(item, onUpdate, priority = 1) {
   return enqueue(async () => {
     const key = cacheKey(item);
     const cached = await idbGet("meta", key);
-    const fresh = cached && Date.now() - cached.at < 1000 * 60 * 60 * 24 * 21;
+    const fresh = cached?.data?.posterUrl && Date.now() - cached.at < 1000 * 60 * 60 * 24 * 21;
     let meta = fresh ? cached.data : null;
     if (!fresh) {
       meta = await lookup(item);

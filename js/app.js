@@ -1,4 +1,4 @@
-import { artwork } from "./art.js?v=2";
+import { artwork } from "./art.js?v=3";
 import { idbAll, idbClear, idbDel, idbGet, idbSet } from "./db.js";
 import {
   buildLibrary,
@@ -10,8 +10,8 @@ import {
   normalizeKey,
   polishLibrary,
   shortText,
-} from "./library.js";
-import { enrichItem } from "./metadata.js";
+} from "./library.js?v=11";
+import { enrichItem, remotePoster } from "./metadata.js";
 import { fileWantsDemux, languageFromName, loadMovi, moviWasmUrl, vttFile } from "./playback.js";
 import { collectFromFileList, collectFromHandle } from "./scan.js";
 
@@ -38,6 +38,14 @@ const state = {
 };
 
 const BRAND = "Netflix oh";
+
+function shownName(item) {
+  return item?.sourceName || item?.title || "";
+}
+
+function episodeName(episode) {
+  return episode?.sourceName || episode?.title || "";
+}
 const playIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12-7.5L7 4.5z"></path></svg>`;
 const infoIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6"></path><path d="M12 7.5h.01"></path></svg>`;
 const plusIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>`;
@@ -61,13 +69,45 @@ function fileUrl(path) {
   return url;
 }
 
-function posterFor(item) {
-  if (item.posterPath) {
+function secureUrl(url) {
+  return String(url || "").replace(/^http:\/\//i, "https://");
+}
+
+function imageSources(item, wide = false) {
+  const list = [];
+  if (item?.posterPath) {
     const local = fileUrl(item.posterPath);
-    if (local) return local;
+    if (local) list.push(local);
   }
-  if (item.posterUrl) return item.posterUrl;
-  return artwork(item.title, item.year, false);
+  if (item?.posterUrl) list.push(secureUrl(item.posterUrl));
+  for (const extra of item?.posterAlts || []) {
+    const url = secureUrl(extra);
+    if (url) list.push(url);
+  }
+  list.push(artwork(item?.title || "Title", item?.year, wide));
+  return [...new Set(list.filter(Boolean))];
+}
+
+function imageTag(item, { wide = false, alt = "", show = "", className = "" } = {}) {
+  const sources = imageSources(item, wide);
+  const [src, ...alts] = sources;
+  const kind = item?.type === "series" ? "series" : "movie";
+  return `<img${className ? ` class="${className}"` : ""} src="${esc(src || "")}" data-alts="${esc(alts.join("|"))}" alt="${esc(alt || item?.title || "")}" data-year="${esc(item?.year || "")}" data-wide="${wide ? "1" : "0"}" data-kind="${kind}" data-show="${esc(show || item?.title || "")}">`;
+}
+
+function applyImage(image, item, wide) {
+  const sources = imageSources(item, wide);
+  const [src, ...alts] = sources;
+  if (!src) return;
+  image.dataset.alts = alts.join("|");
+  image.dataset.fallback = "";
+  image.dataset.tried = "";
+  image.dataset.show = item?.title || image.dataset.show || "";
+  if (image.getAttribute("src") !== src) image.src = src;
+}
+
+function posterFor(item) {
+  return imageSources(item, false)[0] || "";
 }
 
 function backdropFor(item) {
@@ -77,7 +117,7 @@ function backdropFor(item) {
   }
   if (item.backdropUrl) return item.backdropUrl;
   if (item.posterUrl && !item.posterPath) return item.posterUrl;
-  return artwork(item.title, item.year, true);
+  return artwork(shownName(item), item.year, true);
 }
 
 function stillFor(episode, series) {
@@ -85,8 +125,21 @@ function stillFor(episode, series) {
     const local = fileUrl(episode.stillPath);
     if (local) return local;
   }
-  if (episode?.stillUrl) return episode.stillUrl;
+  if (episode?.stillUrl) return secureUrl(episode.stillUrl);
   return posterFor(series);
+}
+
+function stillTag(episode, series, className = "") {
+  const sources = [];
+  if (episode?.stillPath) {
+    const local = fileUrl(episode.stillPath);
+    if (local) sources.push(local);
+  }
+  if (episode?.stillUrl) sources.push(secureUrl(episode.stillUrl));
+  sources.push(...imageSources(series, true));
+  const unique = [...new Set(sources.filter(Boolean))];
+  const [src, ...alts] = unique;
+  return `<img${className ? ` class="${className}"` : ""} src="${esc(src || "")}" data-alts="${esc(alts.join("|"))}" alt="${esc(episode?.title || series?.title || "")}" data-year="${esc(series?.year || "")}" data-wide="1" data-kind="series" data-show="${esc(series?.title || "")}">`;
 }
 
 function blurb(item) {
@@ -245,6 +298,9 @@ function paintChrome() {
     sync.setAttribute("aria-label", label);
     sync.title = label;
   }
+  const logout = document.getElementById("logout");
+  if (logout) logout.hidden = state.preview || !(state.connected || state.items.length);
+  document.body.classList.toggle("intro", !state.preview && !state.scanning && !state.items.length);
 }
 
 function cacheItems(items) {
@@ -269,13 +325,13 @@ function scheduleSave() {
 
 function card(item, land = false) {
   const rating = displayRating(item);
+  const name = shownName(item);
   return `<article class="card ${land ? "land" : ""}" data-card="${esc(item.id)}">
     <button class="poster" data-act="open" data-id="${esc(item.id)}" type="button">
-      <img src="${esc(posterFor(item))}" alt="${esc(item.title)}" data-year="${esc(item.year || "")}" data-wide="${land ? "1" : "0"}">
+      ${imageTag(item, { wide: land, alt: name })}
       <span class="rate-badge">${rating.score.toFixed(1)}</span>
-      <span class="hover-title">${esc(item.title)}</span>
+      <span class="hover-title">${esc(name)}</span>
     </button>
-    <p class="cap">${esc(item.title)}</p>
   </article>`;
 }
 
@@ -301,10 +357,10 @@ function trending() {
 
 function continueCard(entry) {
   const ratio = entry.progress.duration ? Math.min(100, Math.round((entry.progress.time / entry.progress.duration) * 100)) : 8;
-  const label = entry.episode ? `${entry.item.title} · S${entry.episode.season} E${entry.episode.episode}` : entry.item.title;
+  const label = entry.episode ? `${shownName(entry.item)} · S${entry.episode.season} E${entry.episode.episode}` : shownName(entry.item);
   return `<article class="card land progress-card">
     <button class="poster" type="button" data-act="play" data-id="${esc(entry.item.id)}" data-ep="${esc(entry.episode?.id || "")}" data-file="${esc(entry.version.filePath)}">
-      <img src="${esc(entry.episode ? stillFor(entry.episode, entry.item) : backdropFor(entry.item))}" alt="">
+      ${entry.episode ? stillTag(entry.episode, entry.item) : imageTag(entry.item, { wide: true, alt: shownName(entry.item) })}
       <span>${esc(label)}</span>
       <span class="cw-bar"><i style="width:${ratio}%"></i></span>
     </button>
@@ -352,7 +408,10 @@ function heroSlider(items) {
 }
 
 function creditLine() {
-  return `<p class="credit">Developed by R Rajkumar Padmanabhan · <a href="https://www.instagram.com/i.rajkumar__/" target="_blank" rel="noopener noreferrer">Instagram @i.rajkumar__</a></p>`;
+  return `<footer class="site-foot">
+    <div class="site-foot-who"><strong>R Rajkumar Padmanabhan</strong><span>Developer</span></div>
+    <a href="https://www.instagram.com/i.rajkumar__/" target="_blank" rel="noopener noreferrer">Instagram · @i.rajkumar__</a>
+  </footer>`;
 }
 
 function hero(item) {
@@ -360,7 +419,7 @@ function hero(item) {
   return `<section class="hero" data-hero="${esc(item.id)}" data-bg="${esc(item.id)}">
     <div class="hero-copy">
       <p class="eyebrow">${esc(item.category)}</p>
-      <h1>${esc(item.title)}</h1>
+      <h1>${esc(shownName(item))}</h1>
       <div class="hero-meta">${billboardMeta(item)}</div>
       <p class="synopsis" data-desc>${esc(shortText(blurb(item), 180))}</p>
       <div class="actions">
@@ -385,27 +444,26 @@ function banners() {
 }
 
 function setupView() {
-  return `<section class="setup">
-    <p class="eyebrow">${esc(BRAND)}</p>
-    <h1>Add your files.</h1>
-    <p class="lede">Choose the folder where your movies and series are saved. They show up here with the real title, a poster, a rating, and a Play button.</p>
-    <div class="actions">
-      <button class="solid" type="button" data-act="choose">Add folder</button>
+  return `<section class="setup landing">
+    <div class="landing-hero">
+      <h1>Your Unlimited Collections</h1>
+      <button class="signup" type="button" data-act="choose">Free <span aria-hidden="true">›</span></button>
     </div>
+    ${creditLine()}
+  </section>
+  <section class="landing-more">
     <div class="faq">
       <button class="faq-q" type="button" data-act="faq" aria-expanded="false">What is this? <span class="faq-mark">+</span></button>
       <p class="faq-a" hidden>${esc(BRAND)} is a private screen for movies and series already saved on this device. Pick a folder and those files are laid out with posters, ratings, and seasons. Nothing in the folder is uploaded.</p>
       <button class="faq-q" type="button" data-act="faq" aria-expanded="false">How does it work? <span class="faq-mark">+</span></button>
-      <p class="faq-a" hidden>Choose the folder once. ${esc(BRAND)} reads each file name, drops tags such as @cc, @mj, @Im, Pahe, YTS, and HQ, and keeps the movie or series title. Seasons stay together, and multi-part movies stay in part order. A poster and rating are added for every title. Press Play to watch. Chrome and Edge can open the same folder again later.</p>
+      <p class="faq-a" hidden>Choose the folder once. Each card uses the name already on that file or folder. Seasons stay together, and multi-part movies stay in part order. A poster and rating are added for every title. Press Play to watch. Chrome and Edge can open the same folder again later.</p>
     </div>
     <ul class="points">
       <li>Add the folder once. ${esc(BRAND)} sorts each file as a movie or a series and does not ask for a path again.</li>
       <li>A season folder, or files named S01E02, becomes Season 1, Season 2, and so on.</li>
       <li>Part 1, CD1, or 1of2 stays Part 1, and the next part follows it.</li>
     </ul>
-    <p class="fine">Nothing is uploaded. Chrome and Edge can remember the folder and refresh when files change. Other browsers ask you to choose the folder again. Put poster.jpg or movie.nfo beside a title to use your own artwork and synopsis.</p>
-    ${creditLine()}
-    <div class="poster-row" aria-hidden="true"><div class="fake-poster"></div><div class="fake-poster"></div><div class="fake-poster"></div></div>
+    <p class="fine">Nothing is uploaded. Chrome and Edge can remember the folder and refresh when files change. Other browsers ask you to choose the folder again.</p>
   </section>`;
 }
 
@@ -427,7 +485,7 @@ function homeView() {
   return `${banners()}${heroSlider(picks)}
     ${continueList().length ? `<section class="row"><div class="row-head"><h2>${esc(words.continue)}</h2></div><div class="row-wrap"><button class="row-arrow prev" type="button" data-act="row-scroll" data-dir="-1" aria-label="Previous">‹</button><div class="scroller">${continueList().map(continueCard).join("")}</div><button class="row-arrow next" type="button" data-act="row-scroll" data-dir="1" aria-label="Next">›</button></div></section>` : ""}
     ${row("Trending Now", picks.slice(0, 18))}
-    ${row(words.recent, recent(), { land: true })}
+    ${row(words.recent, recent())}
     ${row(words.movies, movies().slice(0, 18), { href: "#/movies" })}
     ${row(words.series, seriesItems().slice(0, 18), { href: "#/series" })}
     ${genreRows.map(([genre, list]) => row(genre, list.slice(0, 18), { href: `#/browse/${encodeURIComponent(genre)}` })).join("")}
@@ -479,7 +537,7 @@ function hasDetails(item) {
 function dashTitles(query) {
   const q = normalizeKey(query);
   if (!q) return state.items;
-  return state.items.filter((item) => normalizeKey(`${item.title} ${item.director || ""} ${item.showDir || ""} ${(item.genres || []).join(" ")}`).includes(q));
+  return state.items.filter((item) => normalizeKey(`${shownName(item)} ${item.title} ${item.director || ""} ${item.showDir || ""} ${(item.genres || []).join(" ")}`).includes(q));
 }
 
 function dashFiles(query) {
@@ -491,7 +549,7 @@ function dashFiles(query) {
       : (item.seasons || []).flatMap((season) => (season.episodes || []).flatMap((episode) => episode.versions || []));
     for (const file of files) {
       const path = file.filePath || "";
-      if (q && !normalizeKey(`${item.title} ${path}`).includes(q)) continue;
+      if (q && !normalizeKey(`${shownName(item)} ${item.title} ${path}`).includes(q)) continue;
       rows.push({ item, path, size: file.size || 0, kind: file.quality || file.ext || "" });
     }
   }
@@ -501,7 +559,7 @@ function dashFiles(query) {
 function dashTitleRow(item) {
   const status = state.preview ? "Sample layout" : hasDetails(item) ? (item.metaSource || "Matched") : (item.omdbChecked ? "No public match" : "Looking up");
   return `<tr data-dash="${esc(item.id)}">
-    <td><button class="dash-title" type="button" data-act="open" data-id="${esc(item.id)}"><img src="${esc(posterFor(item))}" alt=""><span><strong>${esc(item.title)}</strong><small>${esc(item.showDir || item.category)}</small></span></button></td>
+    <td><button class="dash-title" type="button" data-act="open" data-id="${esc(item.id)}">${imageTag(item, { alt: shownName(item) })}<span><strong>${esc(shownName(item))}</strong><small>${esc(item.showDir || item.category)}</small></span></button></td>
     <td>${esc(item.category)}</td>
     <td>${esc(item.year || "—")}</td>
     <td>${esc(item.director || "—")}</td>
@@ -520,10 +578,10 @@ function detailView(item) {
   const versions = item.type === "movie" ? item.versions : [];
   return `<section class="detail-hero" data-bg="${esc(item.id)}"></section>
     <section class="detail">
-      <img class="detail-poster" src="${esc(posterFor(item))}" alt="${esc(item.title)}" data-year="${esc(item.year || "")}">
+      ${imageTag(item, { className: "detail-poster", alt: shownName(item) })}
       <div>
         <p class="eyebrow">${esc(item.category)}</p>
-        <h1>${esc(item.title)}</h1>
+        <h1>${esc(shownName(item))}</h1>
         <div class="facts">${factMarkup(item)}</div>
         <p class="plot" data-plot>${esc(blurb(item))}</p>
         <div class="actions">
@@ -532,11 +590,11 @@ function detailView(item) {
         </div>
         ${item.credits?.length ? `<p class="credits">Details: ${esc(item.credits.join(", "))}. Video stays in your folder. Audio tracks and subtitles in the file can be switched while it plays.</p>` : `<p class="credits">File size is read from your folder. While a title plays, switch audio and subtitles from the file, search this folder, or upload an SRT, VTT, or ASS subtitle.</p>`}
         ${versions.length > 1 ? `<h3>${versions.some((version) => version.part) ? "Parts" : "Versions"}</h3><div class="versions">${versions.map((version) => `<button class="version" type="button" data-act="play" data-id="${esc(item.id)}" data-file="${esc(version.filePath)}">${esc([version.part ? `Part ${version.part}` : "", version.quality || version.ext, formatBytes(version.size)].filter(Boolean).join(" · "))}</button>`).join("")}</div>` : ""}
-        ${item.extras?.length ? `<h3>Extras</h3><div class="versions">${item.extras.map((extra) => `<button class="version" type="button" data-act="play" data-id="${esc(item.id)}" data-file="${esc(extra.filePath)}">${esc(extra.title)} · ${esc(formatBytes(extra.size))}</button>`).join("")}</div>` : ""}
+        ${item.extras?.length ? `<h3>Extras</h3><div class="versions">${item.extras.map((extra) => `<button class="version" type="button" data-act="play" data-id="${esc(item.id)}" data-file="${esc(extra.filePath)}">${esc(extra.sourceName || extra.title)} · ${esc(formatBytes(extra.size))}</button>`).join("")}</div>` : ""}
         ${seasons.length ? `<div class="season-switch">${seasons.map((entry) => `<button class="season-btn ${entry.number === selected ? "on" : ""}" type="button" data-act="season" data-season="${entry.number}">${esc(entry.name)}</button>`).join("")}</div>
           <div>${(season?.episodes || []).map((episode) => `<button class="episode" type="button" data-act="play" data-id="${esc(item.id)}" data-ep="${esc(episode.id)}">
-            <img src="${esc(stillFor(episode, item))}" alt="${esc(episode.title)}" data-year="${esc(item.year || "")}" data-wide="1">
-            <span><strong>${episode.episode ? `${episode.episode}. ` : ""}${esc(episode.title)}</strong>
+            ${stillTag(episode, item)}
+            <span><strong>${episode.episode ? `${episode.episode}. ` : ""}${esc(episodeName(episode))}</strong>
             <small>${esc([formatDuration(episode.duration), formatBytes(episode.size), episode.versions[0]?.quality].filter(Boolean).join(" · "))}</small>
             ${episode.description ? `<em>${esc(shortText(episode.description, 140))}</em>` : ""}</span>
           </button>`).join("")}</div>` : ""}
@@ -548,9 +606,9 @@ function searchView() {
   const query = document.getElementById("search")?.value || "";
   const q = normalizeKey(query);
   const hits = !q ? state.items : state.items.filter((item) => {
-    if (normalizeKey(item.title).includes(q)) return true;
+    if (normalizeKey(`${shownName(item)} ${item.title}`).includes(q)) return true;
     if ((item.genres || []).some((genre) => normalizeKey(genre).includes(q))) return true;
-    return item.type === "series" && item.seasons.some((season) => season.episodes.some((episode) => normalizeKey(episode.title).includes(q)));
+    return item.type === "series" && item.seasons.some((season) => season.episodes.some((episode) => normalizeKey(`${episodeName(episode)} ${episode.title}`).includes(q)));
   });
   return `<section class="search-page">${banners()}
     <h1>Search</h1>
@@ -605,7 +663,7 @@ function libraryView() {
     <div class="dash-scroll">
       <table class="dash-table">
         <thead><tr><th>File</th><th>Title</th><th>Kind</th><th>Size</th></tr></thead>
-        <tbody data-dash-files>${fileRows.length ? fileRows.map((row) => `<tr><td>${esc(row.path)}</td><td>${esc(row.item.title)}</td><td>${esc(String(row.kind || "").toUpperCase())}</td><td>${esc(formatBytes(row.size))}</td></tr>`).join("") : `<tr><td colspan="4">No video files match that.</td></tr>`}</tbody>
+        <tbody data-dash-files>${fileRows.length ? fileRows.map((row) => `<tr><td>${esc(row.path)}</td><td>${esc(shownName(row.item))}</td><td>${esc(String(row.kind || "").toUpperCase())}</td><td>${esc(formatBytes(row.size))}</td></tr>`).join("") : `<tr><td colspan="4">No video files match that.</td></tr>`}</tbody>
       </table>
     </div>
     <p class="note">${remembered ? "This browser remembers the folder after you allow it once." : "This browser cannot remember a folder path. Choose the folder once per visit."} A typed disk path cannot be read from this page, so the folder picker is the path. Nothing here is a sample title once your folder is connected.</p>
@@ -643,12 +701,11 @@ function render() {
 function patchItem(item) {
   document.querySelectorAll(`[data-card="${CSS.escape(item.id)}"]`).forEach((node) => {
     const image = node.querySelector("img");
-    const src = posterFor(item);
-    if (image && image.src !== src) image.src = src;
+    if (image) applyImage(image, item, image.dataset.wide === "1");
     const rating = node.querySelector("[data-rating]");
     if (rating) rating.innerHTML = ratingMarkup(item);
     const cap = node.querySelector(".cap");
-    if (cap) cap.textContent = item.title;
+    if (cap) cap.textContent = shownName(item);
   });
   const heroNode = document.querySelector(`[data-hero="${CSS.escape(item.id)}"]`);
   if (heroNode) {
@@ -661,7 +718,7 @@ function patchItem(item) {
     const plot = document.querySelector("[data-plot]");
     if (plot) plot.textContent = blurb(item);
     const poster = document.querySelector(".detail-poster");
-    if (poster) poster.src = posterFor(item);
+    if (poster) applyImage(poster, item, false);
     const facts = document.querySelector(".detail .facts");
     if (facts) facts.innerHTML = factMarkup(item);
   }
@@ -878,7 +935,7 @@ async function refreshLibrary() {
 }
 
 async function forgetFolder() {
-  if (!confirm(`Remove this library from ${BRAND} on this device? The files stay in the folder.`)) return;
+  if (!confirm(`Log out of ${BRAND} on this device? Your files stay in the folder.`)) return;
   await idbDel("kv", "handle");
   await idbDel("kv", "catalog");
   await idbClear("progress");
@@ -951,8 +1008,8 @@ function playerEpisodes(item, episode) {
   const episodes = (item.seasons || []).flatMap((season) => (season.episodes || []).map((entry) => ({ ...entry, seasonName: season.name })));
   if (episodes.length < 2) return "";
   return `<div class="player-episodes"><h3>Episodes</h3><div class="player-ep-row">${episodes.map((entry) => `<button class="player-ep${entry.id === episode.id ? " on" : ""}" type="button" data-act="play" data-id="${esc(item.id)}" data-ep="${esc(entry.id)}">
-      <span class="thumb"><img src="${esc(stillFor(entry, item))}" alt="${esc(entry.title)}" data-year="${esc(item.year || "")}" data-wide="1"></span>
-      <span>S${entry.season} E${entry.episode || "?"} · ${esc(entry.title)}</span>
+      <span class="thumb">${stillTag(entry, item)}</span>
+      <span>S${entry.season} E${entry.episode || "?"} · ${esc(episodeName(entry))}</span>
     </button>`).join("")}</div></div>`;
 }
 
@@ -1120,7 +1177,7 @@ async function openPlayer(item, episode, version) {
   }
   const token = ++playerToken;
   const root = document.getElementById("player");
-  const title = episode ? `${item.title} · ${episode.title}` : item.title;
+  const title = episode ? `${shownName(item)} · ${episodeName(episode)}` : shownName(item);
   root.classList.toggle("has-episodes", Boolean(episode));
   root.innerHTML = `<div class="player-top"><button type="button" data-act="close-player">Close</button><strong>${esc(title)}</strong><span data-quality></span></div>
     <div class="stage"></div>
@@ -1446,7 +1503,7 @@ function onSearchInput(event) {
   const box = document.querySelector("[data-results]");
   if (!box) return;
   const query = normalizeKey(event.target.value);
-  const hits = !query ? state.items : state.items.filter((item) => normalizeKey(`${item.title} ${(item.genres || []).join(" ")}`).includes(query) || (item.type === "series" && item.seasons.some((season) => season.episodes.some((episode) => normalizeKey(episode.title).includes(query)))));
+  const hits = !query ? state.items : state.items.filter((item) => normalizeKey(`${shownName(item)} ${item.title} ${(item.genres || []).join(" ")}`).includes(query) || (item.type === "series" && item.seasons.some((season) => season.episodes.some((episode) => normalizeKey(`${episodeName(episode)} ${episode.title}`).includes(query)))));
   box.innerHTML = hits.length ? `<div class="grid">${hits.slice(0, 40).map((item) => card(item)).join("")}</div>` : `<p class="muted">Nothing in your library matches that.</p>`;
 }
 
@@ -1485,7 +1542,7 @@ async function onClick(event) {
   if (act === "choose") return chooseFolder();
   if (act === "allow") return allowFolder();
   if (act === "refresh") return refreshLibrary();
-  if (act === "forget") return forgetFolder();
+  if (act === "forget" || act === "logout") return forgetFolder();
   if (act === "open") {
     location.hash = `#/title/${encodeURIComponent(button.dataset.id)}`;
     return;
@@ -1621,7 +1678,7 @@ function bind() {
       const found = dashTitles(state.dashQuery);
       const fileRows = dashFiles(state.dashQuery).slice(0, 200);
       if (titles) titles.innerHTML = found.length ? found.map(dashTitleRow).join("") : `<tr><td colspan="8">Nothing in this folder matches that.</td></tr>`;
-      if (files) files.innerHTML = fileRows.length ? fileRows.map((row) => `<tr><td>${esc(row.path)}</td><td>${esc(row.item.title)}</td><td>${esc(String(row.kind || "").toUpperCase())}</td><td>${esc(formatBytes(row.size))}</td></tr>`).join("") : `<tr><td colspan="4">No video files match that.</td></tr>`;
+      if (files) files.innerHTML = fileRows.length ? fileRows.map((row) => `<tr><td>${esc(row.path)}</td><td>${esc(shownName(row.item))}</td><td>${esc(String(row.kind || "").toUpperCase())}</td><td>${esc(formatBytes(row.size))}</td></tr>`).join("") : `<tr><td colspan="4">No video files match that.</td></tr>`;
       return;
     }
     if (event.target.id === "sub-search") {
@@ -1655,8 +1712,29 @@ function bind() {
   document.body.addEventListener("error", (event) => {
     const img = event.target;
     if (!(img instanceof HTMLImageElement) || img.dataset.fallback === "1") return;
+    const alts = (img.dataset.alts || "").split("|").filter(Boolean);
+    if (alts.length) {
+      const next = alts.shift();
+      img.dataset.alts = alts.join("|");
+      if (next.startsWith("data:")) img.dataset.fallback = "1";
+      img.src = next;
+      return;
+    }
+    if (img.dataset.tried !== "1") {
+      img.dataset.tried = "1";
+      const title = img.dataset.show || img.alt;
+      remotePoster(title, img.dataset.year, img.dataset.kind).then((url) => {
+        if (url && img.dataset.fallback !== "1") {
+          img.src = url;
+          return;
+        }
+        img.dataset.fallback = "1";
+        img.src = artwork(img.alt || title || "Title", img.dataset.year || "", img.dataset.wide === "1");
+      });
+      return;
+    }
     img.dataset.fallback = "1";
-    img.src = artwork(img.alt || img.dataset.fallbackTitle || "Title", img.dataset.year || "", img.dataset.wide === "1");
+    img.src = artwork(img.alt || img.dataset.show || "Title", img.dataset.year || "", img.dataset.wide === "1");
   }, true);
   setInterval(() => {
     const slider = document.querySelector("[data-slider]");

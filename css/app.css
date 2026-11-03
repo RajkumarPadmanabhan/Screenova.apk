@@ -39,6 +39,13 @@ body.scrolled .topbar { background: #141414; }
 .desk-nav, .search { display: none; }
 .icon.sync { display: none; }
 .top-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.logout {
+  border: 1px solid rgba(255, 255, 255, 0.75); background: rgba(0, 0, 0, 0.45); color: white;
+  font-weight: 600; font-size: 0.92rem; cursor: pointer; padding: 6px 14px; border-radius: 4px;
+  white-space: nowrap; margin-left: 8px;
+}
+.logout:hover { color: white; }
+.logout[hidden] { display: none !important; }
 .avatar {
   width: 32px; height: 32px; margin-left: 6px; border-radius: 4px;
   display: grid; place-items: center; background: #e50914; color: white;
@@ -364,9 +371,9 @@ h1, h2, h3 { font-family: inherit; letter-spacing: -0.03em; margin: 0; font-weig
   .setup, .page-head, .row-head, .banner, .detail, .search-page, .library { padding-left: 4vw; padding-right: 4vw; }
   .banner { margin-left: 4vw; margin-right: 4vw; }
   .scroller, .grid, .chips { padding-left: 4vw; padding-right: 4vw; }
-  .scroller { grid-auto-columns: 200px; }
+  .scroller { grid-auto-columns: 200px; scroll-padding-left: 4vw; scroll-padding-right: 4vw; }
   .card.land { min-width: 280px; }
-  .poster:hover { transform: scale(1.08); z-index: 2; transition: 180ms ease; }
+  .poster:hover { outline: 2px solid rgba(255, 255, 255, 0.85); outline-offset: -2px; z-index: 1; }
   .row-arrow {
     display: grid; place-items: center; position: absolute; top: 8px; bottom: 22px; z-index: 2;
     width: 48px; font-size: 2.2rem; background: rgba(20, 20, 20, 0.62);
@@ -382,6 +389,101 @@ h1, h2, h3 { font-family: inherit; letter-spacing: -0.03em; margin: 0; font-weig
 body.skin-netflix .chip.on, body.skin-netflix .solid { background: #e50914; }
 body.skin-netflix .seek { accent-color: #e50914; }
 body.skin-netflix .bar i, body.skin-netflix .cw-bar i { background: #e50914; }
+
+.setup.landing {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.62) 0%, rgba(0, 0, 0, 0.38) 42%, rgba(0, 0, 0, 0.78) 100%),
+    url("../images/Netflix-all-movies-and-series-featured-image-7d33b38f-83c0-47c7-975b-fc7cfaa9ab53.jpg") center / cover no-repeat;
+}
+.setup.landing::before, .setup.landing::after { display: none; }
+.landing-hero {
+  flex: 1;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  text-align: center;
+  gap: 22px;
+  padding: 108px 24px 36px;
+}
+.landing-hero h1 {
+  max-width: 14em;
+  margin: 0;
+  color: #fff;
+  font-size: clamp(2.5rem, 6.2vw, 4.2rem);
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.75);
+}
+.signup {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 132px;
+  border: 0;
+  border-radius: 4px;
+  background: #e50914;
+  color: #fff;
+  padding: 12px 28px;
+  font-size: 1.35rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.signup:hover { background: #f6121d; }
+.site-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 32px;
+  flex-wrap: wrap;
+  margin: 36px 4vw 96px;
+  padding: 18px 0 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  color: #b3b3b3;
+}
+.site-foot-who { display: grid; gap: 3px; }
+.site-foot-who strong { color: #fff; font-size: 0.98rem; font-weight: 700; letter-spacing: 0; }
+.site-foot-who span { color: #8c8c8c; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; }
+.site-foot a { color: #fff; font-weight: 600; text-decoration: none; }
+.site-foot a:hover { text-decoration: underline; }
+.setup.landing .site-foot {
+  margin: 0;
+  padding: 16px 7vw 22px;
+  border-top: 0;
+  background: rgba(0, 0, 0, 0.82);
+}
+.landing-more {
+  display: grid;
+  gap: 18px;
+  padding: 36px 6vw 56px;
+  background: #141414;
+}
+body.intro .topbar {
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.72), transparent);
+  box-shadow: none;
+}
+body.intro .desk-nav,
+body.intro .search,
+body.intro .sync,
+body.intro .folder,
+body.intro .mobile-search,
+body.intro .avatar,
+body.intro .tabbar { display: none !important; }
+body.intro .app { padding-bottom: 0; }
+@media (min-width: 960px) {
+  .site-foot { margin-bottom: 40px; }
+  .setup.landing { padding: 0; }
+  .setup.landing .landing-hero h1 { max-width: 14em; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }

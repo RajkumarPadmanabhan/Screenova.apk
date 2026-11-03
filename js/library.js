@@ -218,6 +218,21 @@ export function tidyTitle(value) {
   return text.replace(/\s+/g, " ").trim();
 }
 
+export function systemName(value) {
+  return String(value || "")
+    .replace(/\.[^.]+$/, "")
+    .replace(/[._]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function showSystemName(record) {
+  if (record.titleFolder?.raw) return systemName(record.titleFolder.raw);
+  const base = String(record.fileName || "").replace(/\.[^.]+$/, "");
+  const cut = base.split(/(?:^|[.\s_-])(?:S\d{1,2}(?:[.\s_-]*E\d{1,3})?|E\d{1,3})\b/i)[0];
+  return systemName(cut || base);
+}
+
 function isWeakTitle(title) {
   return !title || /^(episode|ep|part|chapter|video|movie|e|disc|cd)?\s*\d{0,3}$/i.test(title);
 }
@@ -292,6 +307,37 @@ function findNamedImage(images, dir, names) {
   const wanted = new Set(names.filter(Boolean).map((name) => name.toLowerCase()));
   const hit = images.find((image) => dirOf(image.relativePath) === dir && wanted.has(image.name.replace(/\.[^.]+$/, "").toLowerCase()));
   return hit ? hit.relativePath : null;
+}
+
+function imageFolders(showDir, seasons) {
+  const dirs = new Set();
+  if (showDir) {
+    dirs.add(showDir);
+    const parent = dirOf(showDir);
+    if (parent) dirs.add(parent);
+  }
+  for (const season of seasons || []) {
+    for (const episode of season.episodes || []) {
+      const dir = dirOf(episode.versions?.[0]?.filePath || "");
+      if (!dir) continue;
+      dirs.add(dir);
+      const parent = dirOf(dir);
+      if (parent) dirs.add(parent);
+    }
+  }
+  return [...dirs];
+}
+
+function findBestImage(images, dirs, names) {
+  const folders = new Set(dirs.filter(Boolean));
+  const pool = images.filter((image) => folders.has(dirOf(image.relativePath)));
+  const wanted = new Set(names.filter(Boolean).map((name) => name.toLowerCase()));
+  const named = pool.find((image) => wanted.has(image.name.replace(/\.[^.]+$/, "").toLowerCase()));
+  if (named) return named.relativePath;
+  const loose = pool.find((image) => /poster|cover|folder|thumb|fanart|backdrop|banner|landscape/i.test(image.name));
+  if (loose) return loose.relativePath;
+  const big = pool.filter((image) => (image.size || 0) > 20 * 1024).sort((a, b) => (b.size || 0) - (a.size || 0));
+  return big[0]?.relativePath || null;
 }
 
 function videoRecord(entry) {
@@ -481,6 +527,7 @@ export function buildLibrary(entries) {
         type: "series",
         category: "Series",
         title: named.title,
+        sourceName: showSystemName(record),
         year: named.year,
         genres: [],
         rating: null,
@@ -499,6 +546,7 @@ export function buildLibrary(entries) {
     const series = seriesMap.get(key);
     const candidate = trustedShowDir(record, named.title);
     if (candidate && (!series.showDir || candidate.length > series.showDir.length)) series.showDir = candidate;
+    if (record.titleFolder?.raw) series.sourceName = systemName(record.titleFolder.raw);
     if (!series.year && named.year) series.year = named.year;
     series.genres = [...new Set([...series.genres, ...record.genres])];
     series.size += record.size;
@@ -548,6 +596,7 @@ export function buildLibrary(entries) {
             season: number,
             episode: episodeNo,
             title: primary.episodeTitle || generic,
+            sourceName: systemName(versions[0].fileName),
             size: versions.reduce((sum, version) => sum + version.size, 0),
             duration: null,
             addedAt: Math.max(...group.map((item) => item.lastModified || 0)),
@@ -574,8 +623,8 @@ export function buildLibrary(entries) {
       genres: series.genres,
       rating: series.rating,
       description: series.description,
-      posterPath: findNamedImage(images, series.showDir || "", ["poster", "folder", "cover", "show", "thumb"]),
-      backdropPath: findNamedImage(images, series.showDir || "", ["fanart", "backdrop", "background", "banner"]),
+      posterPath: findBestImage(images, imageFolders(series.showDir, seasons), ["poster", "folder", "cover", "show", "thumb"]),
+      backdropPath: findBestImage(images, imageFolders(series.showDir, seasons), ["fanart", "backdrop", "background", "banner", "landscape"]),
       posterUrl: "",
       backdropUrl: "",
       showDir: series.showDir,
@@ -639,6 +688,7 @@ export function buildLibrary(entries) {
           filePath: record.filePath,
           fileName: record.fileName,
           title: stripReleaseTags(record.fileName.replace(/\.[^.]+$/, "")) || "Extra",
+          sourceName: systemName(record.fileName),
           size: record.size,
           lastModified: record.lastModified || 0,
           ext: record.ext,
@@ -658,6 +708,7 @@ export function buildLibrary(entries) {
         type: "movie",
         category: "Movie",
         title: assignment.group.title,
+        sourceName: systemName((versions.slice().sort((a, b) => (a.part || 99) - (b.part || 99))[0] || versions[0]).fileName),
         year: assignment.group.year,
         genres: [...new Set(assignment.group.records.flatMap((record) => record.genres))],
         rating: null,
@@ -668,8 +719,8 @@ export function buildLibrary(entries) {
         versions,
         extras,
         subtitlePath: versions.find((version) => version.subtitlePath)?.subtitlePath || null,
-        posterPath: findNamedImage(images, dir, ["poster", "folder", "cover", "thumb", versions[0].fileName.replace(/\.[^.]+$/, "")]),
-        backdropPath: findNamedImage(images, dir, ["fanart", "backdrop", "background", "banner"]),
+        posterPath: findBestImage(images, [dir, dirOf(dir)], ["poster", "folder", "cover", "thumb", versions[0].fileName.replace(/\.[^.]+$/, "")]),
+        backdropPath: findBestImage(images, [dir, dirOf(dir)], ["fanart", "backdrop", "background", "banner", "landscape"]),
         posterUrl: "",
         backdropUrl: "",
         metaSource: null,
@@ -691,12 +742,22 @@ export function polishLibrary(items) {
   for (const item of items || []) {
     const title = tidyTitle(item.title);
     if (title) item.title = title;
+    if (!item.sourceName) {
+      if (item.type === "movie") {
+        const file = item.versions?.[0]?.fileName;
+        item.sourceName = file ? systemName(file) : item.title;
+      } else {
+        const folder = String(item.showDir || "").split(/[/\\]/).filter(Boolean).pop();
+        item.sourceName = folder && !/^season\s*\d+$/i.test(folder) ? systemName(folder) : item.title;
+      }
+    }
     for (const extra of item.extras || []) {
       const extraTitle = tidyTitle(extra.title);
       if (extraTitle) extra.title = extraTitle;
     }
     for (const season of item.seasons || []) {
       for (const episode of season.episodes || []) {
+        if (!episode.sourceName && episode.versions?.[0]?.fileName) episode.sourceName = systemName(episode.versions[0].fileName);
         if (/^(episode\s+\d+|extra|specials?)$/i.test(episode.title || "")) continue;
         const episodeTitle = tidyTitle(episode.title);
         if (episodeTitle) episode.title = episodeTitle;

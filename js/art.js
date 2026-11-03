@@ -62,19 +62,20 @@ export function artwork(title, year, wide = false) {
   ctx.lineTo(wide ? 168 : 110, height - (wide ? 168 : 210));
   ctx.stroke();
   ctx.globalAlpha = 1;
-  if (!wide) {
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "700 54px Outfit, Inter, sans-serif";
-    ctx.textBaseline = "top";
-    const lines = wrap(ctx, title, width - 80);
-    let y = height - 190 - (lines.length - 1) * 62;
-    for (const line of lines) {
-      ctx.fillText(line, 40, y);
-      y += 62;
-    }
+  ctx.fillStyle = "#ffffff";
+  ctx.font = `700 ${wide ? 64 : 48}px Inter, sans-serif`;
+  ctx.textBaseline = "top";
+  const lines = wrap(ctx, title, width - (wide ? 140 : 80));
+  const lineHeight = wide ? 74 : 56;
+  let y = height - (wide ? 150 : 170) - (lines.length - 1) * lineHeight;
+  for (const line of lines) {
+    ctx.fillText(line, wide ? 72 : 40, y);
+    y += lineHeight;
+  }
+  if (year) {
     ctx.fillStyle = light;
     ctx.font = "600 22px Inter, sans-serif";
-    ctx.fillText(year ? String(year) : "SCREENOVA", 40, 48);
+    ctx.fillText(String(year), wide ? 72 : 40, 48);
   }
   const url = canvas.toDataURL("image/jpeg", 0.86);
   cache.set(key, url);

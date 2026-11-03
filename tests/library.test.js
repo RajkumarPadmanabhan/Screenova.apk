@@ -55,6 +55,7 @@ test("groups seasons under one series and keeps movies, genres, size, and sideca
   assert.equal(dune.versions[0].quality, "4K");
   assert.equal(dune.extras.length, 1);
   assert.equal(dune.posterPath, "Movies/Dune Part Two (2024)/poster.jpg");
+  assert.match(dune.sourceName, /^Dune Part Two 2024 /);
   assert.ok(dune.subtitlePath.endsWith(".srt"));
   assert.equal(items.some((item) => /sample/i.test(item.title)), false);
 
@@ -67,11 +68,14 @@ test("groups seasons under one series and keeps movies, genres, size, and sideca
   assert.ok(bear.seasons[0].episodes[0].subtitlePath.endsWith(".en.srt"));
   assert.equal(bear.seasons[1].episodes[0].episode, 1);
   assert.equal(bear.posterPath, "Series/The Bear/poster.jpg");
+  assert.equal(bear.sourceName, "The Bear");
+  assert.equal(bear.seasons[0].episodes[0].sourceName, "The Bear S01E01 720p");
   assert.ok(bear.size > 800 * 1024 * 1024);
 
   const wick = items.find((item) => item.title === "John Wick");
   assert.equal(wick.genres[0], "Action");
   assert.equal(wick.year, 2014);
+  assert.equal(wick.sourceName, "John Wick 2014 1080p");
 
   const bad = items.find((item) => item.title === "Breaking Bad");
   assert.equal(bad.seasons[0].episodes.length, 2);
@@ -120,4 +124,5 @@ test("drops release tags and keeps movie parts in order", () => {
   assert.equal(heat.year, 1995);
   assert.deepEqual(heat.versions.map((version) => version.part), [1, 2, 2]);
   assert.equal(heat.versions[1].quality, "1080p");
+  assert.equal(heat.sourceName, "Heat 1995 CD1 720p YTS @mj");
 });
