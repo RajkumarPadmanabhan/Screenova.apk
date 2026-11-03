@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/app.css?v=6">
+  <link rel="stylesheet" href="css/app.css?v=10">
 </head>
 <body class="gate">
   <div class="app">
@@ -24,6 +24,7 @@
         <a href="#/movies" data-nav="movies"><span data-label="movies">Movies</span></a>
         <a href="#/series" data-nav="series"><span data-label="series">TV Shows</span></a>
         <a href="#/list" data-nav="list"><span data-label="list">My List</span></a>
+        <a href="#/mail" data-nav="mail"><span data-label="mail">Mail</span></a>
       </nav>
       <div class="top-actions">
         <label class="search">
@@ -69,6 +70,7 @@
   <div id="toast" class="toast" role="status"></div>
   <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
   <input id="sub-file" type="file" accept=".srt,.vtt,.ass,.ssa,text/vtt,application/x-subrip" hidden>
-  <script type="module" src="js/app.js?v=6"></script>
+  <input id="resume-file" type="file" accept=".txt,.md,.text,text/plain" hidden>
+  <script type="module" src="js/app.js?v=10"></script>
 </body>
 </html>

@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/library.test.js tests/playback.test.js tests/metadata.test.js"
+    "test": "node --test tests/library.test.js tests/playback.test.js tests/metadata.test.js tests/mail.test.js",
+    "mail": "node server/mail.mjs"
   }
 }
